@@ -86,14 +86,22 @@ h2 .r{color:var(--muted); font-weight:600; letter-spacing:.04em; text-transform:
 .item:last-child{border-bottom:0; padding-bottom:2px}
 .item .grow{flex:1; min-width:0}
 .item .name{font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.item .sub{font-size:12.5px; color:var(--muted)}
-.item .amt{white-space:nowrap; font-size:15px}
+.item .sub,.goal .sub{font-size:12.5px; color:var(--muted)}
+.item .amt,.goal .amt{white-space:nowrap; font-size:15px}
 .item.done .name{text-decoration:line-through; opacity:.5}
 .item.done .amt,.item.done .sub{opacity:.45}
 .pill{flex:0 0 auto; width:23px; height:23px; border-radius:50%; padding:0;
       border:1.5px solid var(--line); background:transparent; color:transparent;
       display:grid; place-items:center; font-size:12px; line-height:1}
 .pill.paid{background:var(--in); border-color:var(--in); color:#fff}
+.goal{padding:12px 0; border-bottom:1px solid var(--rule); cursor:pointer}
+.goal:last-child{border-bottom:0; padding-bottom:2px}
+.goal-top{display:flex; align-items:center; gap:10px}
+.goal-top .name{flex:1; min-width:0; font-weight:500; white-space:nowrap;
+                overflow:hidden; text-overflow:ellipsis}
+.meter{height:5px; border-radius:3px; background:var(--sunk); margin:10px 0 6px; overflow:hidden}
+.meter i{display:block; height:100%; border-radius:3px; background:var(--accent)}
+.meter.done i{background:var(--in)}
 .chip{background:var(--accent-soft); color:var(--accent); border-radius:5px; padding:2px 6px;
       font-size:10px; font-weight:700; letter-spacing:.1em}
 .chip.auto{background:transparent; border:1px solid var(--line); color:var(--muted)}
@@ -167,6 +175,7 @@ const DEFAULTS = {
   accounts: [],             // { id, name, currency, balance }
   cards:    [],             // { id, name, currency, outstanding }
   lines:    [],             // { id, name, group:'income'|'due', currency, amount, status, repeats }
+  goals:    [],             // { id, name, currency, target, saved, by:'YYYY-MM' }
   floor:     { AED:0, INR:0, USD:0 },   // minimum balance to hold
   provision: { AED:0, INR:0, USD:0 }    // monthly discretionary budget, pro-rated by days left
 };
@@ -224,6 +233,31 @@ function daysToCycle(){
   return Math.min(Math.round((d - t) / 86400000), 30);
 }
 
+const ordinal = n => n + (['th','st','nd','rd'][(n % 100 - 20) % 10] || ['th','st','nd','rd'][n % 100] || 'th');
+const ym = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2,'0');
+const monthLabel = by => {
+  const [y,m] = String(by || '').split('-').map(Number);
+  return y ? new Date(y, m - 1, 1).toLocaleDateString(undefined, { month:'short', year:'numeric' }) : '—';
+};
+const monthsUntil = by => {
+  const [y,m] = String(by || '').split('-').map(Number);
+  const t = today();
+  return y ? (y - t.getFullYear()) * 12 + (m - 1 - t.getMonth()) : 0;
+};
+const defaultBy = () => { const t = today(); return ym(new Date(t.getFullYear(), t.getMonth() + 6, 1)); };
+
+/* What a goal needs put aside in a given month: the shortfall spread evenly over
+   the months still to run, counting this one. A goal whose month has passed and
+   is still short needs the whole remainder now. */
+function goalMonthly(g, which){
+  const remaining = Math.max(0, (+g.target || 0) - (+g.saved || 0));
+  if (!remaining) return 0;
+  const left = monthsUntil(g.by);
+  if (left < 0) return which === 0 ? remaining : 0;
+  if (which > left) return 0;
+  return remaining / (left + 1);
+}
+
 /* ---------- money ---------- */
 
 const LOCALES = { INR:'en-IN', AED:'en-AE', USD:'en-US' };
@@ -243,7 +277,8 @@ const convert = (n, from, to) => fromAED(toAED(n, from), to);
 const activeCurrencies = () => CURRENCIES.filter(c =>
   S.accounts.some(a => a.currency === c) ||
   S.cards.some(x => x.currency === c) ||
-  S.lines.some(l => l.currency === c));
+  S.lines.some(l => l.currency === c) ||
+  S.goals.some(g => g.currency === c));
 
 const sum = (arr, k) => arr.reduce((s, x) => s + (+x[k] || 0), 0);
 
@@ -260,14 +295,16 @@ function monthFor(ccy, which, openingOverride){
   const cards     = next ? 0 : sum(S.cards.filter(x => x.currency === ccy), 'outstanding');
   const days      = next ? 30 : daysToCycle();
   const provision = (+S.provision[ccy] || 0) * days / 30;
+  const goals     = S.goals.filter(g => g.currency === ccy)
+                           .reduce((s,g) => s + goalMonthly(g, which), 0);
   const floor     = +S.floor[ccy] || 0;
 
-  const net = opening + income - cards - dues - provision;
+  const net = opening + income - cards - dues - provision - goals;
   const investable = net - floor;
   // What rolls into next month: the floor if you invest everything free, or the
   // whole (short) balance if there was nothing free to invest.
   const carry = net - Math.max(investable, 0);
-  return { ccy, opening, income, cards, dues, provision, days, net, floor, investable, carry };
+  return { ccy, opening, income, cards, dues, provision, goals, days, net, floor, investable, carry };
 }
 
 /* Cover every currency that sits below its floor out of whichever currency has
@@ -358,6 +395,7 @@ function monthView(){
         (p.cards ? wf('Card outstanding', -p.cards, c, { sign:true, cls:'neg' }) : '') +
         wf(monthIdx ? 'Dues' : 'Dues outstanding', -p.dues, c, { sign:true, cls:'neg' }) +
         (p.provision ? wf('Spending provision · ' + p.days + '/30 days', -p.provision, c, { sign:true, cls:'neg' }) : '') +
+        (p.goals ? wf('Goal contributions', -p.goals, c, { sign:true, cls:'neg' }) : '') +
         wf('Net available', p.net, c, { rule:true, strong:true, cls: p.net < 0 ? 'neg' : '' }) +
         wf('Minimum balance to hold', -p.floor, c, { sign:true, cls:'neg' }) +
         wf('Free to invest', p.investable, c, { rule:true, strong:true, cls: short ? 'neg' : '' }) +
@@ -408,15 +446,39 @@ function moneyView(){
     return activeCurrencies().filter(c => +S.provision[c]).map(c =>
       '<div class="item" data-settings><div class="grow">' +
         '<div class="name">Spending provision</div>' +
-        '<div class="sub">' + d + ' of 30 days to the ' + S.cycleDay + 'th</div></div>' +
+        '<div class="sub">' + d + ' of 30 days to the ' + ordinal(S.cycleDay) + '</div></div>' +
         '<span class="chip">' + c + '</span><span class="chip auto">AUTO</span>' +
         '<div class="amt num neg">' + money((+S.provision[c] || 0) * d / 30, c) + '</div></div>').join('');
   }
 
-  const html = block('income', 'Money in') + block('due', 'Dues and expenses');
+  const goals = () => {
+    if (!S.goals.length) return '';
+    const perMonth = S.goals.reduce((s,g) => s + convert(goalMonthly(g, 0), g.currency, dc), 0);
+    return '<h2>Goals<span class="r">≈ ' + money(perMonth, dc) + ' a month</span></h2><div class="card">' +
+      S.goals.map(g => {
+        const target = +g.target || 0, saved = Math.min(+g.saved || 0, target);
+        const done = target > 0 && saved >= target;
+        const left = monthsUntil(g.by), per = goalMonthly(g, 0);
+        const pct = target > 0 ? Math.max(0, Math.min(100, saved / target * 100)) : 0;
+        const status = done ? 'fully funded'
+          : left < 0 ? 'was due ' + monthLabel(g.by) + ' · ' + money(target - saved, g.currency) + ' short'
+          : 'by ' + monthLabel(g.by) + ' · ' + (left === 0 ? 'this month' : left + ' months to go');
+        return '<div class="goal" data-edit-goal="' + g.id + '">' +
+          '<div class="goal-top"><span class="name">' + esc(g.name) + '</span>' +
+            '<span class="chip">' + g.currency + '</span>' +
+            '<span class="amt num' + (done ? '' : ' neg') + '">' +
+              (done ? '—' : money(per, g.currency) + (left < 0 ? '' : '/mo')) + '</span></div>' +
+          '<div class="meter' + (done ? ' done' : '') + '"><i style="width:' + pct.toFixed(1) + '%"></i></div>' +
+          '<div class="sub">' + money(saved, g.currency) + ' of ' + money(target, g.currency) +
+            ' · ' + status + '</div></div>';
+      }).join('') + '</div>';
+  };
+
+  const html = block('income', 'Money in') + block('due', 'Dues and expenses') + goals();
   return (html || '<div class="card empty">Add your salary, then the dues you pay each month.<br><br>' +
     'Tick a line off as it clears — anything still outstanding is what the month view counts.</div>') +
-    '<button class="btn" data-edit-line="new">+ Add income or due</button>';
+    '<button class="btn" data-edit-line="new">+ Add income or due</button>' +
+    '<div style="height:8px"></div><button class="btn" data-edit-goal="new">+ Add a goal</button>';
 }
 
 function accountsView(){
@@ -452,7 +514,8 @@ const seg = (key, options, current) => '<div class="seg">' + options.map(o =>
 
 const ccySeg = cur => seg('currency', CURRENCIES.map(c => ({ v:c, t:c })), cur);
 const field = (k, v, mode) => '<input data-k="' + k + '"' +
-  (mode === 'text' ? '' : ' inputmode="decimal"') + ' value="' + esc(v == null ? '' : v) + '">';
+  (mode === 'text' ? '' : mode === 'month' ? ' type="month"' : ' inputmode="decimal"') +
+  ' value="' + esc(v == null ? '' : v) + '">';
 
 function sheetHTML(){
   const d = sheetState.draft, isNew = sheetState.isNew;
@@ -468,6 +531,22 @@ function sheetHTML(){
       '<label>Currency</label>' + ccySeg(d.currency) +
       '<label>' + (card ? 'Outstanding right now' : 'Balance right now') + '</label>' +
       field(card ? 'outstanding' : 'balance', card ? d.outstanding : d.balance) + acts;
+  }
+
+  if (sheetState.type === 'goal'){
+    const per = goalMonthly({ ...d, target:+d.target || 0, saved:+d.saved || 0 }, 0);
+    return '<h3>' + (isNew ? 'Add a goal' : 'Edit goal') + '</h3>' +
+      '<label>What for</label>' + field('name', d.name, 'text') +
+      '<label>Currency</label>' + ccySeg(d.currency) +
+      '<div class="pair">' +
+        '<div><label>Target amount</label>' + field('target', d.target) + '</div>' +
+        '<div><label>Already set aside</label>' + field('saved', d.saved) + '</div>' +
+      '</div>' +
+      '<label>Needed by</label>' + field('by', d.by, 'month') +
+      '<div class="hint">' + (per > 0
+        ? 'Puts aside ' + money(per, d.currency) + ' a month, counted as a due until it is funded. ' +
+          'Reopen this and raise "already set aside" each time you move money across.'
+        : 'Nothing left to put aside — this one is funded.') + '</div>' + acts;
   }
 
   if (sheetState.type === 'line'){
@@ -514,7 +593,7 @@ function sheetHTML(){
 }
 
 const backupJSON = () => JSON.stringify({
-  accounts:S.accounts, cards:S.cards, lines:S.lines,
+  accounts:S.accounts, cards:S.cards, lines:S.lines, goals:S.goals,
   floor:S.floor, provision:S.provision, rates:S.rates });
 
 const setPath = (obj, path, v) => {
@@ -543,6 +622,9 @@ function commit(){
   } else if (t === 'card'){
     upsert(S.cards, { id: sheetState.id || uid(), name: named('Card'),
                       currency: d.currency, outstanding: +d.outstanding || 0 });
+  } else if (t === 'goal'){
+    upsert(S.goals, { id: sheetState.id || uid(), name: named('Goal'), currency: d.currency,
+                      target: +d.target || 0, saved: +d.saved || 0, by: d.by || defaultBy() });
   } else if (t === 'line'){
     upsert(S.lines, { id: sheetState.id || uid(), name: named('Line'), group: d.group,
                       currency: d.currency, amount: +d.amount || 0,
@@ -562,8 +644,8 @@ function commit(){
         const b = JSON.parse(d.backup);
         if (Array.isArray(b.accounts) && Array.isArray(b.lines))
           Object.assign(S, { accounts:b.accounts, cards:b.cards || [], lines:b.lines,
-            floor:b.floor || S.floor, provision:b.provision || S.provision,
-            rates:b.rates || S.rates });
+            goals:b.goals || [], floor:b.floor || S.floor,
+            provision:b.provision || S.provision, rates:b.rates || S.rates });
         else alert('That backup is missing its accounts or lines — nothing was restored.');
       } catch { alert('That backup text is not valid JSON — your other settings were still saved.'); }
     }
@@ -631,7 +713,9 @@ document.addEventListener('click', e => {
     ['data-edit-account', 'account', S.accounts, { name:'', currency:S.displayCurrency, balance:'' }],
     ['data-edit-card',    'card',    S.cards,    { name:'', currency:S.displayCurrency, outstanding:'' }],
     ['data-edit-line',    'line',    S.lines,    { name:'', currency:S.displayCurrency, amount:'',
-                                                   group:'due', status:'pending', repeats:'yes' }]
+                                                   group:'due', status:'pending', repeats:'yes' }],
+    ['data-edit-goal',    'goal',    S.goals,    { name:'', currency:S.displayCurrency, target:'',
+                                                   saved:'', by: defaultBy() }]
   ]){
     const el = hit('[' + attr + ']');
     if (!el) continue;
@@ -654,7 +738,8 @@ document.addEventListener('click', e => {
   }
   if (hit('[data-delete]')){
     const list = sheetState.type === 'account' ? S.accounts
-               : sheetState.type === 'card'    ? S.cards : S.lines;
+               : sheetState.type === 'card'    ? S.cards
+               : sheetState.type === 'goal'    ? S.goals : S.lines;
     const i = list.findIndex(x => x.id === sheetState.id);
     if (i >= 0) list.splice(i, 1);
     sheetState = null;
