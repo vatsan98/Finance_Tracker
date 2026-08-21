@@ -126,6 +126,10 @@ nav button{flex:1; background:none; border:0; padding:10px 4px 12px; font-size:1
 nav button .g{display:block; font-size:17px; margin-bottom:3px; letter-spacing:0}
 nav button[aria-current="true"]{color:var(--accent)}
 
+.syncline{font-size:11px; color:var(--muted); letter-spacing:.04em; margin:-6px 0 12px; cursor:pointer}
+.syncline.bad{color:var(--out)}
+.banner{border-color:var(--accent); background:var(--accent-soft)}
+.banner .acts{margin-top:12px}
 .empty{text-align:center; color:var(--muted); padding:28px 12px; font-size:15px; line-height:1.6}
 .backdrop{position:fixed; inset:0; background:rgba(8,10,14,.55); display:flex;
           align-items:flex-end; justify-content:center; z-index:20}
@@ -181,6 +185,7 @@ const DEFAULTS = {
   cards:    [],             // { id, name, currency, outstanding }
   lines:    [],             // { id, name, group:'income'|'due', currency, amount, status, repeats }
   goals:    [],             // { id, name, currency, target, saved, by, movedOn, movedAmount }
+  updatedAt: null,          // ISO stamp of the last local edit; decides who wins a sync
   floor:     { AED:0, INR:0, USD:0 },   // minimum balance to hold
   provision: { AED:0, INR:0, USD:0 }    // monthly discretionary budget, pro-rated by days left
 };
@@ -214,9 +219,32 @@ function migrate(v1, base){
   return base;
 }
 
+function persist(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
+
 function save(){
-  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {}
+  S.updatedAt = new Date().toISOString();
+  persist();
+  schedulePush();
   render();
+}
+
+/* Everything that travels between devices. The sync credentials deliberately
+   live outside it, so they reach neither a backup nor the remote file. */
+const payload = () => ({
+  accounts:S.accounts, cards:S.cards, lines:S.lines, goals:S.goals,
+  floor:S.floor, provision:S.provision, rates:S.rates, haircut:S.haircut,
+  cycleDay:S.cycleDay, displayCurrency:S.displayCurrency, updatedAt:S.updatedAt });
+
+const hasData = () => S.accounts.length || S.cards.length || S.lines.length || S.goals.length;
+
+function adopt(d){
+  Object.assign(S, {
+    accounts:d.accounts || [], cards:d.cards || [], lines:d.lines || [], goals:d.goals || [],
+    floor:d.floor || S.floor, provision:d.provision || S.provision, rates:d.rates || S.rates,
+    haircut:d.haircut != null ? d.haircut : S.haircut,
+    cycleDay:d.cycleDay != null ? d.cycleDay : S.cycleDay,
+    displayCurrency:d.displayCurrency || S.displayCurrency, updatedAt:d.updatedAt || null });
+  persist();
 }
 const uid = () => Math.random().toString(36).slice(2, 9);
 
@@ -283,7 +311,7 @@ const LOCALES = { INR:'en-IN', AED:'en-AE', USD:'en-US' };
 const money = (n, ccy) => new Intl.NumberFormat(LOCALES[ccy] || 'en-US',
   { style:'currency', currency:ccy, minimumFractionDigits:0, maximumFractionDigits:0 })
   .format(n || 0).replace(/^-/, '\u2212');
-const signed = (n, ccy) => (n < 0 ? '−' : '+') + money(Math.abs(n), ccy);
+const signed = (n, ccy) => (n < 0 ? '−' : n > 0 ? '+' : '') + money(Math.abs(n), ccy);
 
 const toAED = (n, c) => c === 'AED' ? n : c === 'USD' ? n * S.rates.AEDperUSD : n / S.rates.INRperAED;
 const fromAED = (n, c) => c === 'AED' ? n : c === 'USD' ? n / S.rates.AEDperUSD : n * S.rates.INRperAED;
@@ -542,7 +570,9 @@ const seg = (key, options, current) => '<div class="seg">' + options.map(o =>
 
 const ccySeg = cur => seg('currency', CURRENCIES.map(c => ({ v:c, t:c })), cur);
 const field = (k, v, mode) => '<input data-k="' + k + '"' +
-  (mode === 'text' ? '' : mode === 'month' ? ' type="month"' : ' inputmode="decimal"') +
+  (mode === 'text' ? ' autocapitalize="off" autocorrect="off" spellcheck="false"'
+   : mode === 'secret' ? ' type="password" autocomplete="off" spellcheck="false"'
+   : mode === 'month' ? ' type="month"' : ' inputmode="decimal"') +
   ' value="' + esc(v == null ? '' : v) + '">';
 
 function sheetHTML(){
@@ -613,6 +643,16 @@ function sheetHTML(){
       'after fees — 0.9975 keeps 99.75%. The cycle day is when your spending resets; the ' +
       'provision counts only the days still to run.</div>' +
     perCcy +
+    '<h2 style="margin-top:24px">Sync across devices</h2>' +
+    '<label>Private repo</label>' + field('sync.repo', d.sync.repo, 'text') +
+    '<div class="pair">' +
+      '<div><label>File path</label>' + field('sync.path', d.sync.path, 'text') + '</div>' +
+      '<div><label>Access token</label>' + field('sync.token', d.sync.token, 'secret') + '</div>' +
+    '</div>' +
+    '<div class="hint">Owner/name of a <b>private</b> repo you own, e.g. ' +
+      'vatsan98/cashflow-data. The token is a GitHub fine-grained personal access token ' +
+      'scoped to just that repo with <b>Contents: read and write</b>. It is kept on this ' +
+      'device only — never in a backup, and never in the synced file. Enter it once per device.</div>' +
     '<h2 style="margin-top:24px">Backup</h2>' +
     '<textarea data-k="backup">' + esc(d.backup) + '</textarea>' +
     '<div class="hint">Copy this somewhere safe. Paste an old backup over it and save to restore — ' +
@@ -621,9 +661,7 @@ function sheetHTML(){
     '<button class="btn solid" data-save>Save</button></div>';
 }
 
-const backupJSON = () => JSON.stringify({
-  accounts:S.accounts, cards:S.cards, lines:S.lines, goals:S.goals,
-  floor:S.floor, provision:S.provision, rates:S.rates });
+const backupJSON = () => JSON.stringify(payload());
 
 const setPath = (obj, path, v) => {
   const parts = path.split('.');
@@ -667,6 +705,12 @@ function commit(){
     S.cycleDay = Math.min(31, Math.max(1, +d.cycleDay || 1));
     for (const c of CURRENCIES)
       for (const k of ['floor','provision']) S[k][c] = +d[k][c] || 0;
+    const repo = (d.sync.repo || '').trim(), path = (d.sync.path || '').trim() || 'state.json';
+    if (repo !== sync.repo || path !== sync.path) sync.base = null;   // a different file, a different lineage
+    Object.assign(sync, { repo, path, token: (d.sync.token || '').trim() });
+    saveSync();
+    if (syncOn()){ syncInfo.sha = null; setTimeout(runSync, 0); }
+    else syncInfo = { status:'off', note:'', sha:null, at:null, remote:null };
     // Only restore when the box was actually edited — otherwise saving any other
     // setting would write the pre-edit snapshot straight back over it.
     if (d.backup != null && d.backup.trim() !== d.backupWas.trim()){
@@ -689,6 +733,170 @@ function upsert(list, rec){
   if (i >= 0) list[i] = rec; else list.push(rec);
 }
 
+/* ============================================================================
+   Sync — one JSON file in a private GitHub repo of your own.
+
+   The contents API demands the blob sha you last read, so a device holding
+   stale data is refused rather than allowed to overwrite. That refusal is the
+   whole safety story: on a clash you are asked which side wins, and every save
+   is a commit you can read back or roll back.
+
+   Credentials live under their own storage key so they never reach a backup
+   or the synced file.
+   ========================================================================== */
+
+const SYNC_KEY = 'cashrunway.sync';
+let sync = loadSync();
+let syncInfo = { status:'off', note:'', sha:null, at:null, remote:null };
+let pushTimer = null;
+
+function loadSync(){
+  const blank = { repo:'', path:'state.json', token:'', base:null };
+  try { return Object.assign(blank, JSON.parse(localStorage.getItem(SYNC_KEY) || '{}')); }
+  catch { return blank; }
+}
+const saveSync = () => { try { localStorage.setItem(SYNC_KEY, JSON.stringify(sync)); } catch {} };
+const syncOn = () => !!(sync.repo && sync.token);
+
+const b64 = {
+  encode: str => {
+    const bytes = new TextEncoder().encode(str);
+    let out = '';
+    for (let i = 0; i < bytes.length; i += 0x8000)
+      out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(out);
+  },
+  decode: str => new TextDecoder().decode(
+    Uint8Array.from(atob(str.replace(/\s/g, '')), c => c.charCodeAt(0)))
+};
+
+const ghUrl = () => 'https://api.github.com/repos/' + sync.repo.trim().replace(/^\/|\/$/g, '') +
+                    '/contents/' + sync.path.trim().replace(/^\//, '');
+
+const gh = (method, body) => fetch(ghUrl(), {
+  method, cache:'no-store',
+  headers: { Authorization: 'Bearer ' + sync.token.trim(),
+             Accept: 'application/vnd.github+json',
+             'X-GitHub-Api-Version': '2022-11-28' },
+  body: body ? JSON.stringify(body) : undefined });
+
+async function ghFail(r){
+  const hint = r.status === 401 ? 'the token was rejected'
+             : r.status === 403 ? 'the token lacks Contents write on that repo'
+             : r.status === 404 ? 'no such repo or path'
+             : 'GitHub returned ' + r.status;
+  let detail = '';
+  try { detail = (await r.json()).message || ''; } catch {}
+  return new Error(hint + (detail ? ' — ' + detail : ''));
+}
+
+async function ghRead(){
+  const r = await gh('GET');
+  if (r.status === 404){ syncInfo.sha = null; return null; }
+  if (!r.ok) throw await ghFail(r);
+  const j = await r.json();
+  syncInfo.sha = j.sha;
+  return JSON.parse(b64.decode(j.content));
+}
+
+async function ghWrite(){
+  const body = { message: 'Cash Runway — ' + new Date().toISOString(),
+                 content: b64.encode(JSON.stringify(payload(), null, 1)) };
+  if (syncInfo.sha) body.sha = syncInfo.sha;
+  const r = await gh('PUT', body);
+  if (r.status === 409 || r.status === 422) return 'stale';
+  if (!r.ok) throw await ghFail(r);
+  syncInfo.sha = (await r.json()).content.sha;
+  return 'ok';
+}
+
+const setSync = (status, note) => {
+  syncInfo.status = status;
+  syncInfo.note = note || '';
+  if (status === 'ok'){ syncInfo.at = Date.now(); syncInfo.remote = null; }
+  render();
+};
+
+/* The base is the remote version this device's state was last derived from.
+   Comparing against it — rather than comparing clocks — is what makes a stale
+   device detectable: two devices editing in either order both produce a base
+   that no longer matches the remote sha, and neither can quietly win. */
+function markSynced(){
+  sync.base = { sha: syncInfo.sha, stamp: S.updatedAt || null };
+  saveSync();
+}
+const conflict = remote => {
+  syncInfo.remote = remote;
+  setSync('conflict', 'Another device saved changes this one has not seen.');
+};
+
+async function runSync(){
+  if (!syncOn() || syncInfo.status === 'busy') return;
+  setSync('busy');
+  try {
+    const remote = await ghRead();          // also refreshes syncInfo.sha
+    const base = sync.base;
+
+    if (!remote){                            // nothing stored yet — seed it
+      await ghWrite(); markSynced(); return setSync('ok');
+    }
+    if (!base){                              // this device has never synced
+      if (hasData()){
+        syncInfo.remote = remote;
+        return setSync('conflict', 'This device holds data that has never been synced.');
+      }
+      adopt(remote); markSynced(); return setSync('ok');
+    }
+
+    const remoteMoved = syncInfo.sha !== base.sha;
+    const localEdited = (S.updatedAt || null) !== base.stamp;
+
+    if (remoteMoved && localEdited) return conflict(remote);
+    if (remoteMoved){ adopt(remote); markSynced(); return setSync('ok'); }
+    if (localEdited){
+      if (await ghWrite() === 'stale') return conflict(await ghRead());
+      markSynced();
+    }
+    setSync('ok');
+  } catch (e){ setSync('error', e.message); }
+}
+
+function schedulePush(){
+  if (!syncOn()) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(runSync, 1500);
+}
+
+async function resolveConflict(keepMine){
+  const remote = syncInfo.remote;
+  syncInfo.remote = null;
+  if (!keepMine){ adopt(remote); markSynced(); return setSync('ok'); }
+  setSync('busy');
+  try {                                     // syncInfo.sha is the live one, so this write lands
+    if (await ghWrite() === 'stale') return conflict(await ghRead());
+    markSynced();
+    setSync('ok');
+  } catch (e){ setSync('error', e.message); }
+}
+
+function syncLine(){
+  if (syncInfo.status === 'conflict')
+    return '<div class="card banner"><div>' + esc(syncInfo.note) +
+      ' Which copy should win?</div><div class="acts">' +
+      '<button class="btn" data-conflict="theirs">Use the other device</button>' +
+      '<button class="btn solid" data-conflict="mine">Keep this one</button></div></div>';
+  if (!syncOn()) return '';
+  const ago = !syncInfo.at ? '' : (mins => mins < 1 ? 'just now'
+    : mins < 60 ? mins + ' min ago' : Math.round(mins / 60) + ' h ago')
+    (Math.round((Date.now() - syncInfo.at) / 60000));
+  const text = syncInfo.status === 'busy'  ? 'Syncing…'
+             : syncInfo.status === 'error' ? 'Sync failed · ' + esc(syncInfo.note)
+             : syncInfo.status === 'ok'    ? 'Synced ' + ago
+             : 'Not synced yet';
+  return '<div class="syncline' + (syncInfo.status === 'error' ? ' bad' : '') +
+         '" data-settings>' + text + '</div>';
+}
+
 /* ---------- shell ---------- */
 
 const TABS = [
@@ -700,7 +908,8 @@ const TABS = [
 function render(){
   const body = view === 'month' ? monthView() : view === 'money' ? moneyView() : accountsView();
   document.getElementById('app').innerHTML =
-    '<header><h1>Cash Runway</h1><button class="icon" data-settings aria-label="Settings">⚙</button></header>' + body;
+    '<header><h1>Cash Runway</h1><button class="icon" data-settings aria-label="Settings">⚙</button></header>' +
+    syncLine() + body;
   document.getElementById('tabs').innerHTML = TABS.map(t =>
     '<button data-tab="' + t.id + '" aria-current="' + (view === t.id) + '">' +
     '<span class="g">' + t.g + '</span>' + t.t + '</button>').join('');
@@ -742,6 +951,9 @@ document.addEventListener('click', e => {
     return save();
   }
 
+  const cf = hit('[data-conflict]');
+  if (cf) return void resolveConflict(cf.dataset.conflict === 'mine');
+
   const tab = hit('[data-tab]');
   if (tab){ view = tab.dataset.tab; return render(); }
 
@@ -751,7 +963,7 @@ document.addEventListener('click', e => {
   if (hit('[data-settings]')) return openSheet({ type:'settings', draft: {
     displayCurrency: S.displayCurrency, rates: { ...S.rates }, haircut: S.haircut,
     cycleDay: S.cycleDay, floor: { ...S.floor }, provision: { ...S.provision },
-    backup: backupJSON(), backupWas: backupJSON() } });
+    sync: { ...sync }, backup: backupJSON(), backupWas: backupJSON() } });
 
   for (const [attr, type, list, blank] of [
     ['data-edit-account', 'account', S.accounts, { name:'', currency:S.displayCurrency, balance:'' }],
@@ -792,6 +1004,10 @@ document.addEventListener('click', e => {
 });
 
 render();
+if (syncOn()) runSync();
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && syncInfo.status !== 'conflict') runSync();
+});
 </script>
 </body>
 </html>

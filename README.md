@@ -58,6 +58,37 @@ Data lives in `localStorage` on the device you use it on and never leaves the
 phone — which also means it dies if you clear browser data. Settings has a
 **Backup** box: copy that text somewhere safe, paste it back to restore.
 
+## Syncing between devices
+
+Optional. Off unless you fill it in, and the app works exactly as before without it.
+
+State lives as one `state.json` in a **private GitHub repo of your own** — no new
+service, no third party holding your balances, and every save is a commit you can
+read back or roll back.
+
+**Setting it up**
+
+1. Create a private repo, e.g. `vatsan98/cashflow-data`. It can be empty; the
+   first sync writes the file.
+2. Make a **fine-grained personal access token** (GitHub → Settings → Developer
+   settings → Personal access tokens → Fine-grained): repository access limited
+   to that one repo, permission **Contents: read and write**. Nothing else.
+3. In the app, Settings → *Sync across devices* → paste the repo and the token.
+   Repeat on each device.
+
+The token is held under its own storage key on that device. It never reaches a
+backup, and never reaches the synced file.
+
+**How clashes are handled.** The app records which remote version the local state
+came from. If the remote has moved on since — because another device wrote —
+and this device also has unsent edits, the write is refused and you are asked
+which copy wins. Nothing is merged behind your back and nothing is overwritten
+silently. Clock skew between devices is irrelevant; it compares lineage, not
+timestamps.
+
+Syncing happens when the app opens, when it returns to the foreground, and a
+second or so after any edit.
+
 ## Deliberately not here
 
 Bank sync. Login. Categories, budgets, tags. Transaction history and
