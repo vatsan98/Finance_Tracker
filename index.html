@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Cash Runway">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f1115">
+<title>Cash Runway</title>
+<style>
+:root{
+  --bg:#f5f6f8; --card:#fff; --text:#11151c; --muted:#69727e; --line:#e3e6eb;
+  --in:#0a7a4b; --out:#c33c2e; --accent:#2f6fed; --chip:#eceff4; --warn:#b8860b;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1115; --card:#181b21; --text:#e8ebf0; --muted:#98a1ad; --line:#272b33;
+    --in:#3ddc97; --out:#ff6f6f; --accent:#6ea0ff; --chip:#222731; --warn:#e0b341;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1115; --card:#181b21; --text:#e8ebf0; --muted:#98a1ad; --line:#272b33;
+  --in:#3ddc97; --out:#ff6f6f; --accent:#6ea0ff; --chip:#222731; --warn:#e0b341;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  -webkit-text-size-adjust:100%;
+}
+main{max-width:560px; margin:0 auto; padding:14px 14px 96px}
+header{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px}
+h1{font-size:19px; margin:0; letter-spacing:-.01em}
+h2{font-size:13px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:22px 0 8px; font-weight:600}
+.card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:10px}
+.total{text-align:center; padding:18px 14px}
+.total .big{font-size:34px; font-weight:650; letter-spacing:-.02em}
+.label{font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em}
+.pool-head{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px}
+.ccy{font-size:12px; font-weight:700; letter-spacing:.08em; color:var(--muted)}
+.now{font-size:27px; font-weight:650; letter-spacing:-.02em}
+.row3{display:flex; gap:12px; margin-top:10px; border-top:1px solid var(--line); padding-top:10px}
+.row3>div{flex:1; min-width:0}
+.row3 .v{font-size:16px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.neg{color:var(--out)} .pos{color:var(--in)}
+svg.spark{display:block; width:100%; height:34px; margin-top:10px}
+.item{display:flex; align-items:center; gap:10px; padding:11px 0; border-bottom:1px solid var(--line); cursor:pointer}
+.item:last-child{border-bottom:0}
+.item .grow{flex:1; min-width:0}
+.item .name{font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.item .sub{font-size:13px; color:var(--muted)}
+.item .amt{font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap}
+.chip{display:inline-block; background:var(--chip); border-radius:6px; padding:1px 6px; font-size:11px; font-weight:700; letter-spacing:.05em; color:var(--muted)}
+.past{opacity:.45}
+button{font:inherit; color:inherit; cursor:pointer}
+.btn{width:100%; padding:13px; border-radius:12px; border:1px dashed var(--line); background:transparent; color:var(--accent); font-weight:600}
+.btn.solid{border:0; background:var(--accent); color:#fff; border-radius:12px}
+.btn.danger{border:0; background:transparent; color:var(--out); font-weight:600}
+.icon{background:none; border:0; font-size:20px; padding:6px; line-height:1}
+nav{position:fixed; left:0; right:0; bottom:0; display:flex; background:var(--card);
+    border-top:1px solid var(--line); padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1; background:none; border:0; padding:11px 4px 13px; font-size:11px; color:var(--muted); font-weight:600}
+nav button .g{display:block; font-size:19px; margin-bottom:2px}
+nav button[aria-current="true"]{color:var(--accent)}
+.empty{text-align:center; color:var(--muted); padding:26px 10px; font-size:15px}
+.backdrop{position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:flex-end; justify-content:center; z-index:20}
+.sheet{background:var(--card); width:100%; max-width:560px; border-radius:18px 18px 0 0; padding:18px 16px calc(18px + env(safe-area-inset-bottom)); max-height:88vh; overflow:auto}
+.sheet h3{margin:0 0 14px; font-size:17px}
+label{display:block; font-size:12px; color:var(--muted); margin:12px 0 5px; text-transform:uppercase; letter-spacing:.05em}
+input,select,textarea{width:100%; padding:11px; font:inherit; color:var(--text); background:var(--bg);
+  border:1px solid var(--line); border-radius:10px; -webkit-appearance:none; appearance:none}
+textarea{font-size:12px; font-family:ui-monospace,Menlo,monospace; min-height:110px}
+.seg{display:flex; gap:6px}
+.seg button{flex:1; padding:10px; border:1px solid var(--line); background:var(--bg); border-radius:10px; font-weight:600; font-size:14px}
+.seg button[aria-pressed="true"]{background:var(--accent); color:#fff; border-color:var(--accent)}
+.acts{display:flex; gap:10px; margin-top:20px}
+.acts .btn{flex:1}
+.hint{font-size:12px; color:var(--muted); margin-top:8px}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<nav id="tabs"></nav>
+<script>
+'use strict';
+
+/* ---------- constants & state ---------- */
+
+const CURRENCIES = ['AED','INR','USD'];
+const BASE = 'AED';                       // rates are stored as: 1 unit = N BASE
+const KEY  = 'cashrunway.v1';
+
+const DEFAULTS = {
+  homeCurrency: 'AED',
+  rates: { AED: 1, INR: 0.0441, USD: 3.6725 },
+  horizonDays: 60,
+  accounts: [],
+  items: []
+};
+
+let S = load();
+let view = 'dash';
+
+function load(){
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return structuredClone(DEFAULTS);
+    return Object.assign(structuredClone(DEFAULTS), JSON.parse(raw));
+  } catch { return structuredClone(DEFAULTS); }
+}
+function save(){
+  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {}
+  render();
+}
+const uid = () => Math.random().toString(36).slice(2, 9);
+
+/* ---------- dates ---------- */
+
+const ymd = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+const today = () => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); };
+const addDays = (d,n) => new Date(d.getFullYear(), d.getMonth(), d.getDate()+n);
+const daysInMonth = d => new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+const shortDate = d => d.toLocaleDateString(undefined, { day:'numeric', month:'short' });
+
+// Does a recurring/one-off item land on this date?
+function hitsOn(item, d){
+  if (item.repeat === 'monthly') return d.getDate() === Math.min(item.dayOfMonth, daysInMonth(d));
+  return item.date === ymd(d);
+}
+
+/* ---------- money ---------- */
+
+const LOCALES = { INR:'en-IN', AED:'en-AE', USD:'en-US' };
+
+function money(n, ccy, opts = {}){
+  return new Intl.NumberFormat(LOCALES[ccy] || 'en-US', {
+    style:'currency', currency:ccy,
+    minimumFractionDigits: opts.decimals ? 2 : 0,
+    maximumFractionDigits: opts.decimals ? 2 : 0
+  }).format(n);
+}
+const toHome = (n, ccy) => n * (S.rates[ccy] || 0) / (S.rates[S.homeCurrency] || 1);
+
+/* ---------- the projection ---------- */
+
+// Walk day by day from today to the horizon for one currency, tracking the
+// running balance. The minimum along that walk is the number that matters.
+function project(ccy){
+  const accounts = S.accounts.filter(a => a.currency === ccy);
+  const items    = S.items.filter(i => i.currency === ccy);
+  const start    = accounts.reduce((s,a) => s + (+a.balance || 0), 0);
+
+  let bal = start;
+  const series = [start];
+  const events = [];
+  let low = { value: start, date: today() };
+
+  for (let n = 0; n <= S.horizonDays; n++){
+    const d = addDays(today(), n);
+    for (const it of items){
+      if (!hitsOn(it, d)) continue;
+      const delta = (it.kind === 'in' ? 1 : -1) * (+it.amount || 0);
+      bal += delta;
+      events.push({ date: d, name: it.name, delta, currency: ccy, balance: bal });
+    }
+    series.push(bal);
+    if (bal < low.value) low = { value: bal, date: d };
+  }
+  return { currency: ccy, start, end: bal, series, events, low, hasData: accounts.length > 0 || items.length > 0 };
+}
+
+const activeCurrencies = () => CURRENCIES.filter(c =>
+  S.accounts.some(a => a.currency === c) || S.items.some(i => i.currency === c));
+
+/* ---------- rendering helpers ---------- */
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const signed = (n, ccy) => (n >= 0 ? '+' : '−') + money(Math.abs(n), ccy);
+
+function sparkline(series){
+  const min = Math.min(...series), max = Math.max(...series);
+  const span = (max - min) || 1;
+  const pts = series.map((v,i) =>
+    (i / (series.length - 1) * 100).toFixed(2) + ',' + (30 - (v - min) / span * 28).toFixed(2)).join(' ');
+  const zero = min < 0 && max > 0
+    ? '<line x1="0" x2="100" y1="' + (30 - (0 - min)/span*28).toFixed(2) + '" y2="' + (30 - (0 - min)/span*28).toFixed(2) +
+      '" stroke="var(--out)" stroke-width=".5" stroke-dasharray="2 2" opacity=".7"/>'
+    : '';
+  return '<svg class="spark" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true">' + zero +
+    '<polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="1.6" ' +
+    'vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>';
+}
+
+/* ---------- views ---------- */
+
+function dashboard(){
+  const active = activeCurrencies();
+  if (!active.length){
+    return '<div class="card empty">No accounts yet.<br><br>' +
+      'Add your bank balances on the <b>Balances</b> tab, then your income and dues under <b>In &amp; Out</b>.</div>';
+  }
+
+  const runs = active.map(project);
+  let html = '';
+
+  // Combined headline, converted to the home currency.
+  if (active.length > 1){
+    const nowTotal = runs.reduce((s,r) => s + toHome(r.start, r.currency), 0);
+    const lowTotal = runs.reduce((s,r) => s + toHome(r.low.value, r.currency), 0);
+    html += '<div class="card total">' +
+      '<div class="label">Total cash today</div>' +
+      '<div class="big">≈ ' + money(nowTotal, S.homeCurrency) + '</div>' +
+      '<div class="hint">Worst case across all pools ≈ ' + money(lowTotal, S.homeCurrency) +
+      ' · converted at your saved rates</div></div>';
+  }
+
+  for (const r of runs){
+    const dipped = r.low.value < r.start;
+    html += '<div class="card">' +
+      '<div class="pool-head"><span class="ccy">' + r.currency + '</span>' +
+      '<span class="label">now</span></div>' +
+      '<div class="now' + (r.start < 0 ? ' neg' : '') + '">' + money(r.start, r.currency) + '</div>' +
+      sparkline(r.series) +
+      '<div class="row3">' +
+        '<div><div class="label">Lowest point</div>' +
+          '<div class="v' + (r.low.value < 0 ? ' neg' : '') + '">' + money(r.low.value, r.currency) + '</div>' +
+          '<div class="sub label">' + (dipped ? shortDate(r.low.date) : 'today') + '</div></div>' +
+        '<div><div class="label">In ' + S.horizonDays + ' days</div>' +
+          '<div class="v' + (r.end < 0 ? ' neg' : '') + '">' + money(r.end, r.currency) + '</div>' +
+          '<div class="sub label">' + signed(r.end - r.start, r.currency) + '</div></div>' +
+      '</div></div>';
+  }
+
+  // Everything dated, in order, with the running balance of its own pool.
+  const upcoming = runs.flatMap(r => r.events).sort((a,b) => a.date - b.date).slice(0, 14);
+  if (upcoming.length){
+    html += '<h2>Coming up</h2><div class="card">' + upcoming.map(e =>
+      '<div class="item" style="cursor:default">' +
+        '<div class="grow"><div class="name">' + esc(e.name) + '</div>' +
+        '<div class="sub">' + shortDate(e.date) + ' · then ' + money(e.balance, e.currency) + '</div></div>' +
+        '<div class="amt ' + (e.delta >= 0 ? 'pos' : 'neg') + '">' + signed(e.delta, e.currency) + '</div>' +
+      '</div>').join('') + '</div>';
+  }
+  return html;
+}
+
+function balances(){
+  let html = '';
+  for (const c of CURRENCIES){
+    const list = S.accounts.filter(a => a.currency === c);
+    if (!list.length) continue;
+    const sum = list.reduce((s,a) => s + (+a.balance || 0), 0);
+    html += '<h2>' + c + ' · ' + money(sum, c) + '</h2><div class="card">' + list.map(a =>
+      '<div class="item" data-edit-account="' + a.id + '">' +
+        '<div class="grow"><div class="name">' + esc(a.name) + '</div></div>' +
+        '<div class="amt">' + money(+a.balance || 0, c) + '</div>' +
+      '</div>').join('') + '</div>';
+  }
+  if (!S.accounts.length) html = '<div class="card empty">Add each bank account and what is in it right now.</div>';
+  return html + '<button class="btn" data-edit-account="new">+ Add account</button>';
+}
+
+function itemsView(){
+  const render = kind => {
+    const list = S.items.filter(i => i.kind === kind);
+    if (!list.length) return '';
+    const when = i => i.repeat === 'monthly'
+      ? 'Every month on the ' + ordinal(i.dayOfMonth)
+      : shortDate(new Date(i.date + 'T00:00:00'));
+    return '<h2>' + (kind === 'in' ? 'Money in' : 'Money out') + '</h2><div class="card">' + list.map(i => {
+      const gone = i.repeat === 'once' && i.date < ymd(today());
+      return '<div class="item' + (gone ? ' past' : '') + '" data-edit-item="' + i.id + '">' +
+        '<div class="grow"><div class="name">' + esc(i.name) + '</div>' +
+        '<div class="sub">' + when(i) + (gone ? ' · past, not counted' : '') + '</div></div>' +
+        '<span class="chip">' + i.currency + '</span>' +
+        '<div class="amt ' + (kind === 'in' ? 'pos' : 'neg') + '">' + money(+i.amount || 0, i.currency) + '</div>' +
+      '</div>';
+    }).join('') + '</div>';
+  };
+  let html = render('in') + render('out');
+  if (!S.items.length) html = '<div class="card empty">Add salary, rent, card bills, SIPs — anything you expect to move.</div>';
+  return html + '<button class="btn" data-edit-item="new">+ Add income or expense</button>';
+}
+
+const ordinal = n => n + (['th','st','nd','rd'][(n % 100 - 20) % 10] || ['th','st','nd','rd'][n % 100] || 'th');
+
+/* ---------- sheets (add / edit / settings) ---------- */
+
+let sheetState = null;
+
+function openSheet(state){ sheetState = state; render(); }
+function closeSheet(){ sheetState = null; render(); }
+
+function segment(name, options, current){
+  return '<div class="seg">' + options.map(o =>
+    '<button type="button" data-seg="' + name + '" data-val="' + o.v + '" aria-pressed="' +
+    (o.v === current) + '">' + o.t + '</button>').join('') + '</div>';
+}
+
+function sheetHTML(){
+  const d = sheetState.draft;
+
+  if (sheetState.type === 'account'){
+    return '<h3>' + (sheetState.isNew ? 'Add account' : 'Edit account') + '</h3>' +
+      '<label>Name</label><input id="f-name" value="' + esc(d.name) + '" placeholder="e.g. Emirates NBD">' +
+      '<label>Currency</label>' + segment('currency', CURRENCIES.map(c => ({v:c,t:c})), d.currency) +
+      '<label>Balance right now</label><input id="f-balance" inputmode="decimal" value="' + (d.balance ?? '') + '">' +
+      actions(sheetState.isNew);
+  }
+
+  if (sheetState.type === 'item'){
+    const monthly = d.repeat === 'monthly';
+    return '<h3>' + (sheetState.isNew ? 'Add money in / out' : 'Edit') + '</h3>' +
+      '<label>Name</label><input id="f-name" value="' + esc(d.name) + '" placeholder="e.g. Rent, Salary, Card bill">' +
+      '<label>Direction</label>' + segment('kind', [{v:'in',t:'Money in'},{v:'out',t:'Money out'}], d.kind) +
+      '<label>Currency</label>' + segment('currency', CURRENCIES.map(c => ({v:c,t:c})), d.currency) +
+      '<label>Amount</label><input id="f-amount" inputmode="decimal" value="' + (d.amount ?? '') + '">' +
+      '<label>How often</label>' + segment('repeat', [{v:'monthly',t:'Every month'},{v:'once',t:'One time'}], d.repeat) +
+      (monthly
+        ? '<label>Day of the month</label><input id="f-day" inputmode="numeric" value="' + d.dayOfMonth + '">' +
+          '<div class="hint">Months that are too short fall back to the last day.</div>'
+        : '<label>Date</label><input id="f-date" type="date" value="' + d.date + '">') +
+      actions(sheetState.isNew);
+  }
+
+  // settings
+  const rateRows = CURRENCIES.filter(c => c !== BASE).map(c =>
+    '<label>1 ' + c + ' = ? ' + BASE + '</label><input id="f-rate-' + c + '" inputmode="decimal" value="' + S.rates[c] + '">').join('');
+  return '<h3>Settings</h3>' +
+    '<label>Show combined total in</label>' + segment('homeCurrency', CURRENCIES.map(c => ({v:c,t:c})), d.homeCurrency) +
+    '<label>Look ahead</label>' + segment('horizonDays', [{v:30,t:'30 days'},{v:60,t:'60 days'},{v:90,t:'90 days'}], d.horizonDays) +
+    '<h2 style="margin-top:22px">Exchange rates</h2>' + rateRows +
+    '<div class="hint">Typed by hand, never fetched. Only the combined total uses them — each currency card is exact.</div>' +
+    '<h2 style="margin-top:22px">Backup</h2>' +
+    '<textarea id="f-backup">' + esc(JSON.stringify({ accounts:S.accounts, items:S.items, rates:S.rates })) + '</textarea>' +
+    '<div class="hint">Copy this somewhere safe. Paste an old backup over it and save to restore.</div>' +
+    '<div class="acts"><button class="btn" data-close>Cancel</button>' +
+    '<button class="btn solid" data-save>Save</button></div>';
+}
+
+function actions(isNew){
+  return '<div class="acts">' +
+    (isNew ? '<button class="btn" data-close>Cancel</button>' : '<button class="btn danger" data-delete>Delete</button>') +
+    '<button class="btn solid" data-save>Save</button></div>';
+}
+
+/* Pull whatever is currently typed into the draft, so a segment tap never loses it. */
+function captureDraft(){
+  if (!sheetState) return;
+  const d = sheetState.draft, g = id => document.getElementById(id);
+  if (g('f-name'))    d.name    = g('f-name').value;
+  if (g('f-balance')) d.balance = g('f-balance').value;
+  if (g('f-amount'))  d.amount  = g('f-amount').value;
+  if (g('f-day'))     d.dayOfMonth = g('f-day').value;
+  if (g('f-date'))    d.date    = g('f-date').value;
+  if (sheetState.type === 'settings'){
+    for (const c of CURRENCIES) if (g('f-rate-' + c)) d.rates[c] = g('f-rate-' + c).value;
+    if (g('f-backup')) d.backup = g('f-backup').value;
+  }
+}
+
+function commit(){
+  captureDraft();
+  const d = sheetState.draft;
+
+  if (sheetState.type === 'account'){
+    const rec = { id: sheetState.id || uid(), name: (d.name || '').trim() || 'Account',
+                  currency: d.currency, balance: +d.balance || 0 };
+    upsert(S.accounts, rec);
+  } else if (sheetState.type === 'item'){
+    const rec = { id: sheetState.id || uid(), name: (d.name || '').trim() || 'Item',
+                  currency: d.currency, kind: d.kind, amount: Math.abs(+d.amount) || 0, repeat: d.repeat,
+                  dayOfMonth: Math.min(31, Math.max(1, +d.dayOfMonth || 1)), date: d.date };
+    upsert(S.items, rec);
+  } else {
+    S.homeCurrency = d.homeCurrency;
+    S.horizonDays  = +d.horizonDays;
+    for (const c of CURRENCIES) S.rates[c] = c === BASE ? 1 : (+d.rates[c] || S.rates[c]);
+    try {
+      const b = JSON.parse(d.backup);
+      if (Array.isArray(b.accounts) && Array.isArray(b.items)){
+        S.accounts = b.accounts; S.items = b.items;
+        if (b.rates) S.rates = Object.assign(S.rates, b.rates);
+      }
+    } catch { alert('That backup text is not valid — other settings were still saved.'); }
+  }
+  sheetState = null;
+  save();
+}
+
+function upsert(list, rec){
+  const i = list.findIndex(x => x.id === rec.id);
+  if (i >= 0) list[i] = rec; else list.push(rec);
+}
+
+/* ---------- shell ---------- */
+
+const TABS = [
+  { id:'dash',     g:'◎', t:'Dashboard' },
+  { id:'balances', g:'▤', t:'Balances'  },
+  { id:'items',    g:'⇅', t:'In & Out'  }
+];
+
+function render(){
+  const body = view === 'dash' ? dashboard() : view === 'balances' ? balances() : itemsView();
+
+  document.getElementById('app').innerHTML =
+    '<header><h1>Cash Runway</h1><button class="icon" data-settings aria-label="Settings">⚙</button></header>' + body;
+
+  document.getElementById('tabs').innerHTML = TABS.map(t =>
+    '<button data-tab="' + t.id + '" aria-current="' + (view === t.id) + '">' +
+    '<span class="g">' + t.g + '</span>' + t.t + '</button>').join('');
+
+  const old = document.querySelector('.backdrop');
+  if (old) old.remove();
+  if (sheetState){
+    const wrap = document.createElement('div');
+    wrap.className = 'backdrop';
+    wrap.innerHTML = '<div class="sheet">' + sheetHTML() + '</div>';
+    document.body.appendChild(wrap);
+  }
+}
+
+document.addEventListener('click', e => {
+  const hit = sel => e.target.closest(sel);
+
+  const tab = hit('[data-tab]');
+  if (tab){ view = tab.dataset.tab; return render(); }
+
+  if (hit('[data-settings]'))
+    return openSheet({ type:'settings', draft:{ homeCurrency:S.homeCurrency, horizonDays:S.horizonDays,
+                                                rates:Object.assign({}, S.rates), backup:null } });
+
+  const acc = hit('[data-edit-account]');
+  if (acc){
+    const id = acc.dataset.editAccount;
+    const rec = S.accounts.find(a => a.id === id);
+    return openSheet({ type:'account', id: rec && rec.id, isNew: !rec,
+      draft: rec ? Object.assign({}, rec) : { name:'', currency:S.homeCurrency, balance:'' } });
+  }
+
+  const it = hit('[data-edit-item]');
+  if (it){
+    const id = it.dataset.editItem;
+    const rec = S.items.find(x => x.id === id);
+    return openSheet({ type:'item', id: rec && rec.id, isNew: !rec,
+      draft: rec ? Object.assign({}, rec)
+                 : { name:'', currency:S.homeCurrency, kind:'out', amount:'', repeat:'monthly',
+                     dayOfMonth:1, date: ymd(today()) } });
+  }
+
+  const seg = hit('[data-seg]');
+  if (seg){
+    captureDraft();
+    const v = seg.dataset.val;
+    sheetState.draft[seg.dataset.seg] = /^\d+$/.test(v) ? +v : v;
+    return render();
+  }
+
+  if (hit('[data-save]')) return commit();
+  if (hit('[data-close]')) return closeSheet();
+  if (hit('[data-delete]')){
+    const list = sheetState.type === 'account' ? S.accounts : S.items;
+    const i = list.findIndex(x => x.id === sheetState.id);
+    if (i >= 0) list.splice(i, 1);
+    sheetState = null;
+    return save();
+  }
+  if (e.target.classList.contains('backdrop')) return closeSheet();
+});
+
+render();
+</script>
+</body>
+</html>
