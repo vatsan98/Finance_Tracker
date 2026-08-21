@@ -1,34 +1,64 @@
 # Cash Runway
 
-A deliberately small cashflow dashboard for my phone.
+A monthly cashflow control sheet for my phone, ported from the Excel I actually use.
 
-**The one question it answers:** what is the lowest my cash gets between now and
-60 days from now, and on what day.
+**The question it answers:** after everything still outstanding this month, how
+much is left in each currency — and is that above the minimum balance I keep?
 
-## How it works
+## The model
 
-- Enter what's in each bank account right now (**Balances**).
-- Enter what you expect to move — salary, rent, card bills, SIPs, one-off dues (**In & Out**).
-- The **Dashboard** walks forward day by day and shows the running balance, the
-  low point, and where you land at the horizon.
+Per currency, mirroring the spreadsheet's `Monthly Control` sheet line for line:
 
-Multi-currency: AED, INR and USD are projected as **separate cash pools**, because
-you can't pay an AED bill with rupees sitting in an Indian account. Each pool's
-numbers are exact. The combined total on top is converted using exchange rates you
-type by hand in Settings — nothing is fetched, so there is no API key and no way
-for a network failure to break the app.
+```
+  bank balances
++ income outstanding        salary, deductions, transfers in
+− card outstanding          what's sitting on the credit cards
+− dues outstanding          EMIs, rent, family, one-offs
+− spending provision        monthly budget × days left in the cycle ÷ 30
+= net available
+− set aside to invest
+= balance after set-aside   measured against the minimum balance
+```
+
+**Outstanding is the whole idea.** Every income and due line carries a
+paid/pending status, and a line ticked paid drops out of the sum — so the
+number always reflects what is still to come, not what already happened.
+Ticking lines off as they clear is the daily loop; it's one tap per line.
+
+**Currencies are separate pools.** AED, INR and USD each run the waterfall on
+their own, because you can't pay an AED bill with rupees in an Indian account.
+When a pool falls below its minimum balance, the app works out what to move
+from whichever pool has the most spare, and what will actually land after the
+transfer fee.
+
+**Next month** reruns the same arithmetic: opening from this month's closing,
+every repeating line pending again, one-offs dropped, cards back to zero.
+
+## Two deliberate changes from the spreadsheet
+
+- **The exchange rate and the transfer fee are separate fields.** The sheet
+  baked a `*0.9975` haircut into the INR rate itself, which meant the fee was
+  also applied when merely valuing INR in AED. Here the rate is the market rate
+  and the haircut applies only when money actually moves. Enter ~26.07, not the
+  fee-adjusted 26.00.
+- **The spending provision rolls to the next cycle date.** The sheet measured
+  to the current month's cycle day, so the provision fell to zero for the rest
+  of the month once that date passed. This counts to the next occurrence, so it
+  refills instead of vanishing.
 
 ## Running it
 
-It's one file. Open `index.html` — locally, or from GitHub Pages, or anywhere.
-No build step, no dependencies, no server, no account.
+One file, no build step, no dependencies, no server, no account. Open
+`index.html` locally or from GitHub Pages. Fonts are inlined, so it makes zero
+network requests and works offline.
 
-Data lives in `localStorage` on the device you use it on. It never leaves the phone.
-That also means it dies if you clear browser data, so Settings has a **Backup** box:
-copy that text somewhere safe, paste it back to restore.
+Data lives in `localStorage` on the device you use it on and never leaves the
+phone — which also means it dies if you clear browser data. Settings has a
+**Backup** box: copy that text somewhere safe, paste it back to restore.
 
 ## Deliberately not here
 
-Bank sync. Login. Categories, budgets, tags. Transaction history and reconciliation.
-Reports and analytics. Every one of those is why previous attempts got abandoned.
-If something is genuinely missed after a month of real use, it gets added then.
+Bank sync. Login. Categories, budgets, tags. Transaction history and
+reconciliation. Reports and analytics. A day-by-day timeline — the model is
+status-driven, not date-driven, and carrying dates as well would double the
+data entry for no gain.
