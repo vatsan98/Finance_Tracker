@@ -31,8 +31,10 @@ When a pool falls below its minimum balance, the app works out what to move
 from whichever pool has the most spare, and what will actually land after the
 transfer fee.
 
-**Next month** reruns the same arithmetic: opening from this month's closing,
-every repeating line pending again, one-offs dropped, cards back to zero.
+**Next month** reruns the same arithmetic: opening from this month's closing on
+the assumption that you invest what was free and leave the minimum balance
+behind, with every repeating line pending again, one-offs dropped, and cards
+back to zero.
 
 ## Two deliberate changes from the spreadsheet
 

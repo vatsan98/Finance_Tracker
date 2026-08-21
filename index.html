@@ -148,8 +148,8 @@ textarea{font-size:11.5px; font-family:ui-monospace,Menlo,monospace; min-height:
    replaced. Per currency:
 
      opening balances + income outstanding − cards − dues − expense provision
-       = net available − set aside for investments
-       = balance after set-aside, measured against a minimum balance you keep
+       = net available − the minimum balance you keep
+       = what is genuinely free to invest this month
 
    "Outstanding" is the load-bearing idea: an income or due line that is ticked
    paid drops out of the sum. Next month reruns the same arithmetic with every
@@ -168,7 +168,6 @@ const DEFAULTS = {
   cards:    [],             // { id, name, currency, outstanding }
   lines:    [],             // { id, name, group:'income'|'due', currency, amount, status, repeats }
   floor:     { AED:0, INR:0, USD:0 },   // minimum balance to hold
-  setAside:  { AED:0, INR:0, USD:0 },   // this month's investment contributions
   provision: { AED:0, INR:0, USD:0 }    // monthly discretionary budget, pro-rated by days left
 };
 
@@ -261,20 +260,21 @@ function monthFor(ccy, which, openingOverride){
   const cards     = next ? 0 : sum(S.cards.filter(x => x.currency === ccy), 'outstanding');
   const days      = next ? 30 : daysToCycle();
   const provision = (+S.provision[ccy] || 0) * days / 30;
-  const setAside  = +S.setAside[ccy] || 0;
   const floor     = +S.floor[ccy] || 0;
 
-  const net   = opening + income - cards - dues - provision;
-  const after = net - setAside;
-  return { ccy, opening, income, cards, dues, provision, days, net, setAside, after, floor,
-           headroom: after - floor };
+  const net = opening + income - cards - dues - provision;
+  const investable = net - floor;
+  // What rolls into next month: the floor if you invest everything free, or the
+  // whole (short) balance if there was nothing free to invest.
+  const carry = net - Math.max(investable, 0);
+  return { ccy, opening, income, cards, dues, provision, days, net, floor, investable, carry };
 }
 
 /* Cover every currency that sits below its floor out of whichever currency has
    the most spare, the way the sheet moved surplus AED into INR. */
 function transfersFor(months, act){
   const spare = {}, moves = [], net = {};
-  for (const c of act){ spare[c] = months[c].headroom; net[c] = 0; }
+  for (const c of act){ spare[c] = months[c].investable; net[c] = 0; }
 
   for (const need of act.filter(c => spare[c] < -0.5).sort((a,b) => spare[a] - spare[b])){
     while (spare[need] < -0.5){
@@ -298,7 +298,7 @@ function computeAll(){
   const m0 = {}, m1 = {};
   for (const c of act) m0[c] = monthFor(c, 0);
   const t0 = transfersFor(m0, act);
-  for (const c of act) m1[c] = monthFor(c, 1, m0[c].after + t0.net[c]);
+  for (const c of act) m1[c] = monthFor(c, 1, m0[c].carry + t0.net[c]);
   const t1 = transfersFor(m1, act);
   return { act, months: [m0, m1], moves: [t0.moves, t1.moves] };
 }
@@ -326,26 +326,32 @@ function monthView(){
   const m = months[monthIdx], mv = moves[monthIdx];
   let html = '<div class="switch">' +
     [0,1].map(i => '<button data-month="' + i + '" aria-pressed="' + (i === monthIdx) + '">' +
-      (i === 0 ? 'This month' : 'Next month') + ' · ' + monthName(i) + '</button>').join('') + '</div>';
+      (i === 0 ? 'This month' : 'Next month') + ' · ' + monthName(i) + '</button>').join('') + '</div>' +
+    (monthIdx ? '<div class="hint" style="margin:-4px 0 12px">Opens from this month\'s close, ' +
+      'assuming you invest what was free and leave your minimum balance behind.</div>' : '');
 
   if (act.length > 1){
     const dc = S.displayCurrency;
-    const tot = act.reduce((s,c) => s + convert(m[c].after, c, dc), 0);
-    const head = act.reduce((s,c) => s + convert(m[c].headroom, c, dc), 0);
+    const free = act.reduce((s,c) => s + convert(m[c].investable, c, dc), 0);
+    const short = act.filter(c => m[c].investable < 0);
     html += '<div class="card total">' +
-      '<div class="label">Left after set-aside</div>' +
-      '<div class="big num' + (tot < 0 ? ' neg' : '') + '">≈ ' + money(tot, dc) + '</div>' +
-      '<div class="hint">' + (head < 0 ? money(-head, dc) + ' short of your minimum balances'
-                                       : money(head, dc) + ' above your minimum balances') + '</div></div>';
+      '<div class="label">Free to invest</div>' +
+      '<div class="big num' + (free < 0 ? ' neg' : '') + '">≈ ' + money(free, dc) + '</div>' +
+      '<div class="hint">' + (short.length
+        ? 'after your dues and minimum balances — but ' + short.join(' and ') +
+          (short.length > 1 ? ' still need' : ' still needs') + ' topping up first'
+        : 'after everything outstanding and your minimum balances') + '</div></div>';
   }
 
   for (const c of act){
-    const p = m[c];
-    html += '<div class="card pool' + (p.headroom < 0 ? ' alert' : '') + '">' +
+    const p = m[c], short = p.investable < 0;
+    html += '<div class="card pool' + (short ? ' alert' : '') + '">' +
       '<div class="pool-head"><span class="ccy">' + c + '</span>' +
-        '<span class="label">' + (p.headroom < 0 ? 'below minimum' : 'above minimum') + '</span></div>' +
-      '<div class="now num' + (p.headroom < 0 ? ' neg' : '') + '">' + money(p.headroom, c) + '</div>' +
-      '<div class="caption">' + money(p.after, c) + ' left, keeping ' + money(p.floor, c) + ' back</div>' +
+        '<span class="label">' + (short ? 'short of minimum' : '') + '</span></div>' +
+      '<div class="now num' + (short ? ' neg' : '') + '">' + money(p.investable, c) + '</div>' +
+      '<div class="caption">' + (short
+        ? 'nothing to invest until this is covered'
+        : money(p.net, c) + ' available, holding ' + money(p.floor, c) + ' back') + '</div>' +
       '<div class="wfblock">' +
         wf(monthIdx ? 'Opening balance' : 'Bank balances', p.opening, c) +
         wf(monthIdx ? 'Income' : 'Income outstanding', p.income, c, { sign:true, cls: p.income >= 0 ? 'pos' : 'neg' }) +
@@ -353,8 +359,8 @@ function monthView(){
         wf(monthIdx ? 'Dues' : 'Dues outstanding', -p.dues, c, { sign:true, cls:'neg' }) +
         (p.provision ? wf('Spending provision · ' + p.days + '/30 days', -p.provision, c, { sign:true, cls:'neg' }) : '') +
         wf('Net available', p.net, c, { rule:true, strong:true, cls: p.net < 0 ? 'neg' : '' }) +
-        (p.setAside ? wf('Set aside to invest', -p.setAside, c, { sign:true, cls:'neg' }) : '') +
-        wf('Balance after set-aside', p.after, c, { rule:true, strong:true, cls: p.after < 0 ? 'neg' : '' }) +
+        wf('Minimum balance to hold', -p.floor, c, { sign:true, cls:'neg' }) +
+        wf('Free to invest', p.investable, c, { rule:true, strong:true, cls: short ? 'neg' : '' }) +
       '</div></div>';
   }
 
@@ -482,9 +488,8 @@ function sheetHTML(){
     '<h2 style="margin-top:22px">' + c + '</h2>' +
     '<div class="pair">' +
       '<div><label>Minimum balance</label>' + field('floor.' + c, d.floor[c]) + '</div>' +
-      '<div><label>Set aside to invest</label>' + field('setAside.' + c, d.setAside[c]) + '</div>' +
-    '</div>' +
-    '<label>Monthly spending budget</label>' + field('provision.' + c, d.provision[c])).join('');
+      '<div><label>Monthly spending budget</label>' + field('provision.' + c, d.provision[c]) + '</div>' +
+    '</div>').join('');
 
   return '<h3>Settings</h3>' +
     '<label>Show combined total in</label>' + seg('displayCurrency', CURRENCIES.map(c => ({v:c,t:c})), d.displayCurrency) +
@@ -501,13 +506,16 @@ function sheetHTML(){
       'provision counts only the days still to run.</div>' +
     perCcy +
     '<h2 style="margin-top:24px">Backup</h2>' +
-    '<textarea data-k="backup">' + esc(JSON.stringify({
-      accounts:S.accounts, cards:S.cards, lines:S.lines,
-      floor:S.floor, setAside:S.setAside, provision:S.provision, rates:S.rates })) + '</textarea>' +
-    '<div class="hint">Copy this somewhere safe. Paste an old backup over it and save to restore.</div>' +
+    '<textarea data-k="backup">' + esc(d.backup) + '</textarea>' +
+    '<div class="hint">Copy this somewhere safe. Paste an old backup over it and save to restore — ' +
+      'leaving it untouched changes nothing.</div>' +
     '<div class="acts"><button class="btn" data-close>Cancel</button>' +
     '<button class="btn solid" data-save>Save</button></div>';
 }
+
+const backupJSON = () => JSON.stringify({
+  accounts:S.accounts, cards:S.cards, lines:S.lines,
+  floor:S.floor, provision:S.provision, rates:S.rates });
 
 const setPath = (obj, path, v) => {
   const parts = path.split('.');
@@ -546,15 +554,18 @@ function commit(){
     S.haircut  = +d.haircut > 0 ? +d.haircut : 1;
     S.cycleDay = Math.min(31, Math.max(1, +d.cycleDay || 1));
     for (const c of CURRENCIES)
-      for (const k of ['floor','setAside','provision']) S[k][c] = +d[k][c] || 0;
-    if (d.backup != null){
+      for (const k of ['floor','provision']) S[k][c] = +d[k][c] || 0;
+    // Only restore when the box was actually edited — otherwise saving any other
+    // setting would write the pre-edit snapshot straight back over it.
+    if (d.backup != null && d.backup.trim() !== d.backupWas.trim()){
       try {
         const b = JSON.parse(d.backup);
         if (Array.isArray(b.accounts) && Array.isArray(b.lines))
           Object.assign(S, { accounts:b.accounts, cards:b.cards || [], lines:b.lines,
-            floor:b.floor || S.floor, setAside:b.setAside || S.setAside,
-            provision:b.provision || S.provision, rates:b.rates || S.rates });
-      } catch { alert('That backup text is not valid JSON — the other settings were still saved.'); }
+            floor:b.floor || S.floor, provision:b.provision || S.provision,
+            rates:b.rates || S.rates });
+        else alert('That backup is missing its accounts or lines — nothing was restored.');
+      } catch { alert('That backup text is not valid JSON — your other settings were still saved.'); }
     }
   }
   sheetState = null;
@@ -613,8 +624,8 @@ document.addEventListener('click', e => {
 
   if (hit('[data-settings]')) return openSheet({ type:'settings', draft: {
     displayCurrency: S.displayCurrency, rates: { ...S.rates }, haircut: S.haircut,
-    cycleDay: S.cycleDay, floor: { ...S.floor }, setAside: { ...S.setAside },
-    provision: { ...S.provision }, backup: null } });
+    cycleDay: S.cycleDay, floor: { ...S.floor }, provision: { ...S.provision },
+    backup: backupJSON(), backupWas: backupJSON() } });
 
   for (const [attr, type, list, blank] of [
     ['data-edit-account', 'account', S.accounts, { name:'', currency:S.displayCurrency, balance:'' }],
