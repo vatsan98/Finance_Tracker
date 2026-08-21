@@ -78,6 +78,10 @@ h2 .r{color:var(--muted); font-weight:600; letter-spacing:.04em; text-transform:
 .wf.rule{border-top:1px solid var(--rule); margin-top:4px; padding-top:9px}
 .wf.strong .wf-l{color:var(--text); font-weight:600}
 .wf.strong .wf-v{font-size:15px}
+/* a memo: reported, deliberately not part of the sum above it */
+.wf.memo{border-top:1px dashed var(--line); margin-top:6px; padding-top:9px}
+.wf.memo .wf-v{color:var(--muted); font-size:12.5px}
+.wf.memo .wf-l{font-size:12.5px}
 .wfblock{margin-top:12px}
 .neg{color:var(--out)} .pos{color:var(--in)}
 
@@ -266,11 +270,10 @@ function goalMonthly(g, which){
   return remaining / (left - start + 1);
 }
 
-/* What the waterfall actually subtracts. This month counts only transfers you
-   have committed; next month is a forecast, so it assumes the planned one. */
-const goalCharge = (g, which) => which === 0
-  ? (movedThisMonth(g) ? (+g.movedAmount || 0) : 0)
-  : goalMonthly(g, 1);
+/* Goals stay out of the arithmetic. Money moved into one has already left the
+   account you typed a balance for, and money not yet moved is still sitting
+   there — so subtracting either way would double-count. What a goal still needs
+   this month rides along as a memo instead. */
 
 /* ---------- money ---------- */
 
@@ -310,10 +313,10 @@ function monthFor(ccy, which, openingOverride){
   const days      = next ? 30 : daysToCycle();
   const provision = (+S.provision[ccy] || 0) * days / 30;
   const goals     = S.goals.filter(g => g.currency === ccy)
-                           .reduce((s,g) => s + goalCharge(g, which), 0);
+                           .reduce((s,g) => s + goalMonthly(g, which), 0);
   const floor     = +S.floor[ccy] || 0;
 
-  const net = opening + income - cards - dues - provision - goals;
+  const net = opening + income - cards - dues - provision;
   const investable = net - floor;
   // What rolls into next month: the floor if you invest everything free, or the
   // whole (short) balance if there was nothing free to invest.
@@ -360,7 +363,8 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 
 function wf(label, value, ccy, o){
   o = o || {};
-  return '<div class="wf' + (o.rule ? ' rule' : '') + (o.strong ? ' strong' : '') + '">' +
+  return '<div class="wf' + (o.rule ? ' rule' : '') + (o.strong ? ' strong' : '') +
+      (o.memo ? ' memo' : '') + '">' +
     '<span class="wf-l">' + label + '</span>' +
     '<span class="wf-v num' + (o.cls ? ' ' + o.cls : '') + '">' +
       (o.sign ? signed(value, ccy) : money(value, ccy)) + '</span></div>';
@@ -409,11 +413,11 @@ function monthView(){
         (p.cards ? wf('Card outstanding', -p.cards, c, { sign:true, cls:'neg' }) : '') +
         wf(monthIdx ? 'Dues' : 'Dues outstanding', -p.dues, c, { sign:true, cls:'neg' }) +
         (p.provision ? wf('Spending provision · ' + p.days + '/30 days', -p.provision, c, { sign:true, cls:'neg' }) : '') +
-        (p.goals ? wf(monthIdx ? 'Goal contributions' : 'Goals funded this month',
-                      -p.goals, c, { sign:true, cls:'neg' }) : '') +
+
         wf('Net available', p.net, c, { rule:true, strong:true, cls: p.net < 0 ? 'neg' : '' }) +
         wf('Minimum balance to hold', -p.floor, c, { sign:true, cls:'neg' }) +
         wf('Free to invest', p.investable, c, { rule:true, strong:true, cls: short ? 'neg' : '' }) +
+        (p.goals ? wf('Still to move into goals', p.goals, c, { memo:true }) : '') +
       '</div></div>';
   }
 
@@ -568,8 +572,9 @@ function sheetHTML(){
       '</div>' +
       '<label>Needed by</label>' + field('by', d.by, 'month') +
       '<div class="hint">' + (per > 0
-        ? 'Needs ' + money(per, d.currency) + ' a month. Nothing is subtracted until you tick the ' +
-          'transfer as moved, which also raises what is set aside and re-levels the months left.'
+        ? 'Needs ' + money(per, d.currency) + ' a month. Ticking the transfer as moved records it ' +
+          'against the goal and re-levels the months left — it never touches your balances, since ' +
+          'the money has already left the account.'
         : 'Nothing left to put aside — this one is funded.') + '</div>' + acts;
   }
 
