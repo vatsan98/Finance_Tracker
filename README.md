@@ -5,6 +5,26 @@ A monthly cashflow control sheet for my phone, ported from the Excel I actually 
 **The question it answers:** after everything still outstanding this month, how
 much is left in each currency — and is that above the minimum balance I keep?
 
+## This month vs. next month
+
+A single toggle at the top of every tab switches the whole app between the two.
+
+**This month** is always the real, typed figures — balances, card outstandings,
+and each income/due line's actual paid status. Editing here changes those
+numbers directly, same as always.
+
+**Next month** is a forecast, not a projection derived from this month's
+numbers. Every account defaults to its own minimum balance, every card defaults
+to paid off, and every income/due line shows pending (only the ones that
+repeat — a one-off due this month doesn't carry over). None of that is
+editable in place, because none of it is real yet; instead, each account or
+card carries its own **forecast** you can set from its edit screen — pick
+"Set manually" and type what you actually expect, and it overrides the
+default. An "AUTO" or "SET" tag on the Accounts tab shows which one you're
+looking at. A forecast is stamped to a specific calendar month, so if you skip
+setting one for a while it quietly reverts to the default rather than applying
+a stale number to the wrong month.
+
 ## The model
 
 Per currency, mirroring the spreadsheet's `Monthly Control` sheet line for line:
