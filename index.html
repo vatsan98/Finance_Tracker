@@ -78,10 +78,10 @@ h2 .r{color:var(--muted); font-weight:600; letter-spacing:.04em; text-transform:
 .wf.rule{border-top:1px solid var(--rule); margin-top:4px; padding-top:9px}
 .wf.strong .wf-l{color:var(--text); font-weight:600}
 .wf.strong .wf-v{font-size:15px}
-/* a memo: reported, deliberately not part of the sum above it */
-.wf.memo{border-top:1px dashed var(--line); margin-top:6px; padding-top:9px}
-.wf.memo .wf-v{color:var(--muted); font-size:12.5px}
-.wf.memo .wf-l{font-size:12.5px}
+/* a breakdown line nested under a summary row above it */
+.wf.sub{padding:4px 0 4px 14px; font-size:12.5px}
+.wf.sub .wf-l{color:var(--muted); font-size:12.5px}
+.wf.sub .wf-v{color:var(--muted); font-size:12.5px}
 .wfblock{margin-top:12px}
 .neg{color:var(--out)} .pos{color:var(--in)}
 
@@ -325,10 +325,12 @@ function goalMonthly(g, which){
   return remaining / (left - start + 1);
 }
 
-/* Goals stay out of the arithmetic. Money moved into one has already left the
-   account you typed a balance for, and money not yet moved is still sitting
-   there — so subtracting either way would double-count. What a goal still needs
-   this month rides along as a memo instead. */
+/* A goal not yet moved is still sitting in the account, same as the minimum
+   balance is — but both are earmarked, not free, so both come out before
+   arriving at what genuinely is. A goal already ticked moved this month drops
+   to 0 here (goalMonthly does that), since that money has left the account and
+   the balance you type is expected to already reflect it — so nothing is ever
+   subtracted twice for the same goal in the same month. */
 
 /* ---------- money ---------- */
 
@@ -388,7 +390,7 @@ function monthFor(ccy, which){
   const floor     = sum(myAccounts, 'floor');
 
   const net = opening + income - cards - dues - provision;
-  const investable = net - floor;
+  const investable = net - floor - goals;
   return { ccy, opening, income, cards, dues, provision, goals, days, net, floor, investable };
 }
 
@@ -432,10 +434,10 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 function wf(label, value, ccy, o){
   o = o || {};
   return '<div class="wf' + (o.rule ? ' rule' : '') + (o.strong ? ' strong' : '') +
-      (o.memo ? ' memo' : '') + '">' +
+      (o.sub ? ' sub' : '') + '">' +
     '<span class="wf-l">' + label + '</span>' +
     '<span class="wf-v num' + (o.cls ? ' ' + o.cls : '') + '">' +
-      (o.sign ? signed(value, ccy) : money(value, ccy)) + '</span></div>';
+      (o.text ? o.text : o.sign ? signed(value, ccy) : money(value, ccy)) + '</span></div>';
 }
 
 function monthView(){
@@ -466,12 +468,21 @@ function monthView(){
 
   for (const c of act){
     const p = m[c], short = p.investable < 0;
+    const myGoals = S.goals.filter(g => g.currency === c);
+    const goalRows = myGoals.map(g => {
+      const target = +g.target || 0, saved = Math.min(+g.saved || 0, target);
+      const full = target > 0 && saved >= target;
+      const amt = goalMonthly(g, monthIdx);
+      const label = full ? 'funded' : (!monthIdx && movedThisMonth(g)) ? 'moved' : money(amt, c);
+      return wf(esc(g.name), 0, c, { sub:true, text: label });
+    }).join('');
+
     html += '<div class="card pool' + (short ? ' alert' : '') + '">' +
       '<div class="pool-head"><span class="ccy">' + c + '</span>' +
-        '<span class="label">' + (short ? 'short of minimum' : '') + '</span></div>' +
+        '<span class="label">' + (short ? 'short this month' : '') + '</span></div>' +
       '<div class="now num' + (short ? ' neg' : '') + '">' + money(p.investable, c) + '</div>' +
       '<div class="caption">' + (short
-        ? 'nothing to invest until this is covered'
+        ? 'nothing free until this is covered'
         : money(p.net, c) + ' available, holding ' + money(p.floor, c) + ' back') + '</div>' +
       '<div class="wfblock">' +
         wf(monthIdx ? 'Opening balance' : 'Bank balances', p.opening, c) +
@@ -482,8 +493,8 @@ function monthView(){
 
         wf('Net available', p.net, c, { rule:true, strong:true, cls: p.net < 0 ? 'neg' : '' }) +
         wf('Minimum balance to hold', -p.floor, c, { sign:true, cls:'neg' }) +
+        (myGoals.length ? wf('Allocation to goals', -p.goals, c, { sign:true, cls: p.goals > 0 ? 'neg' : '' }) + goalRows : '') +
         wf('Free to invest', p.investable, c, { rule:true, strong:true, cls: short ? 'neg' : '' }) +
-        (p.goals ? wf('Still to move into goals', p.goals, c, { memo:true }) : '') +
       '</div></div>';
   }
 
