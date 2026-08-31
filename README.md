@@ -2,28 +2,35 @@
 
 A monthly cashflow control sheet for my phone, ported from the Excel I actually use.
 
-**The question it answers:** after everything still outstanding this month, how
-much is left in each currency — and is that above the minimum balance I keep?
+**The question it answers:** after everything still outstanding in the month
+I'm looking at, how much is left in each currency — and is that above the
+minimum balance I keep?
 
-## This month vs. next month
+## Picking a month
 
-A single toggle at the top of every tab switches the whole app between the two.
+A picker at the top of every tab — `‹ August 2026 ›` — moves the whole app one
+month at a time, backwards or forwards as far as you like. The middle button
+names the month you're on and jumps straight back to the current one.
 
-**This month** is always the real, typed figures — balances, card outstandings,
-and each income/due line's actual paid status. Editing here changes those
-numbers directly, same as always.
+**Every month holds its own figures.** Balances, card outstandings, and each
+income/due line's paid status all belong to a single month. Ticking rent off in
+August leaves it outstanding in September, and typing a balance for March 2027
+changes nothing about any other month.
 
-**Next month** is a forecast, not a projection derived from this month's
-numbers. Every account defaults to its own minimum balance, every card defaults
-to paid off, and every income/due line shows pending (only the ones that
-repeat — a one-off due this month doesn't carry over). None of that is
-editable in place, because none of it is real yet; instead, each account or
-card carries its own **forecast** you can set from its edit screen — pick
-"Set manually" and type what you actually expect, and it overrides the
-default. An "AUTO" or "SET" tag on the Accounts tab shows which one you're
-looking at. A forecast is stamped to a specific calendar month, so if you skip
-setting one for a while it quietly reverts to the default rather than applying
-a stale number to the wrong month.
+**A month you haven't touched assumes the conservative case** rather than
+showing a blank: every account sits at its own minimum balance, every card is
+paid off, and every line is still outstanding. That's an assumption, not a
+projection from the month before — a bad August never quietly poisons
+September's starting point. The moment you type one figure, only that figure
+stops being assumed; everything else on the month stays assumed until you
+touch it. An **AUTO** tag on the Accounts tab marks what's still assumed.
+
+Clearing a figure back to its assumption removes it entirely, so a month you've
+emptied is indistinguishable from one you never opened.
+
+**One-off lines belong to one month.** A due that doesn't repeat carries the
+month it's for, set when you add it and changeable from its edit screen; it
+appears in that month only. Repeating lines appear in every month.
 
 ## The model
 
@@ -41,9 +48,10 @@ Per currency, mirroring the spreadsheet's `Monthly Control` sheet line for line:
 ```
 
 **Outstanding is the whole idea.** Every income and due line carries a
-paid/pending status, and a line ticked paid drops out of the sum — so the
-number always reflects what is still to come, not what already happened.
-Ticking lines off as they clear is the daily loop; it's one tap per line.
+paid/pending status *per month*, and a line ticked paid drops out of that
+month's sum — so the number always reflects what is still to come, not what
+already happened. Ticking lines off as they clear is the daily loop; it's one
+tap per line.
 
 **Currencies are separate pools.** AED, INR and USD each run the waterfall on
 their own, because you can't pay an AED bill with rupees in an Indian account.
@@ -51,10 +59,11 @@ When a pool falls below its minimum balance, the app works out what to move
 from whichever pool has the most spare, and what will actually land after the
 transfer fee.
 
-**Next month** reruns the same arithmetic: opening from this month's closing on
-the assumption that you invest what was free and leave the minimum balance
-behind, with every repeating line pending again, one-offs dropped, and cards
-back to zero.
+**Any other month** reruns the same arithmetic against that month's own
+figures — whatever you've typed for it, and its assumptions for whatever you
+haven't. The spending provision is the one line that differs: only the month
+actually running is part-spent, so it's the only one pro-rated to the days
+left; every other month budgets a full thirty.
 
 ## Two deliberate changes from the spreadsheet
 

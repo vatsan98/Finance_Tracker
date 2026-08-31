@@ -61,6 +61,14 @@ h2 .r{color:var(--muted); font-weight:600; letter-spacing:.04em; text-transform:
   border-radius:9px; font-size:12.5px; font-weight:600; letter-spacing:.05em; color:var(--muted)}
 .switch button[aria-pressed="true"]{background:var(--accent); border-color:var(--accent); color:#fff}
 
+/* the month picker: two narrow steppers around the month on screen */
+.switch.mp button:first-child, .switch.mp button:last-child{
+  flex:0 0 46px; font-size:19px; line-height:1; letter-spacing:0; padding:7px 4px}
+.mp-now{flex:1; text-transform:none; font-size:13.5px; letter-spacing:.02em;
+  color:var(--text); background:var(--sunk)}
+.mp-back{display:block; font-size:9.5px; font-weight:500; letter-spacing:.06em;
+  text-transform:uppercase; color:var(--accent); margin-top:2px}
+
 .pool{position:relative; overflow:hidden}
 .pool.alert{border-color:var(--out)}
 .pool.alert::before{content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--out)}
@@ -182,36 +190,44 @@ textarea{font-size:11.5px; font-family:ui-monospace,Menlo,monospace; min-height:
    ========================================================================== */
 
 const CURRENCIES = ['AED','INR','USD'];
-const KEY = 'cashrunway.v2';
+const KEY = 'cashrunway.v3';
 
 const DEFAULTS = {
   displayCurrency: 'AED',
   rates: { INRperAED: 26.0679, AEDperUSD: 3.6726 },  // market rate; the fee lives in `haircut`
   haircut: 0.9975,          // what a cross-currency transfer actually lands at
   cycleDay: 22,             // the day the spending cycle resets
-  accounts: [],             // { id, name, currency, balance, floor, fcMonth, fcBalance }
-  cards:    [],             // { id, name, currency, outstanding, fcMonth, fcOutstanding }
-  lines:    [],             // { id, name, group:'income'|'due', currency, amount, status, repeats }
-  goals:    [],             // { id, name, currency, target, saved, by, movedOn, movedAmount }
+  accounts: [],             // { id, name, currency, floor }
+  cards:    [],             // { id, name, currency }
+  lines:    [],             // { id, name, group:'income'|'due', currency, amount, repeats, month }
+  goals:    [],             // { id, name, currency, target, saved, by }
+  months:   {},             // 'YYYY-MM' -> { accounts:{id:n}, cards:{id:n}, lines:{id:'paid'}, goals:{id:{amount}} }
   updatedAt: null,          // ISO stamp of the last local edit; decides who wins a sync
   provision: { AED:0, INR:0, USD:0 }    // monthly discretionary budget, pro-rated by days left
 };
 
 let S = load();
 let view = 'month';
-let monthIdx = 0;         // 0 = this month, 1 = next
+let viewYm = thisMonthKey();   // the calendar month on screen — every figure is read for it
 let sheetState = null;
 
 function load(){
   const base = structuredClone(DEFAULTS);
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return migrateFloor(Object.assign(base, JSON.parse(raw)));
+    if (raw) return upgrade(Object.assign(base, JSON.parse(raw)));
+    const v2 = localStorage.getItem('cashrunway.v2');
+    if (v2) return upgrade(Object.assign(base, JSON.parse(v2)));
     const old = localStorage.getItem('cashrunway.v1');
-    if (old) return migrate(JSON.parse(old), base);
+    if (old) return upgrade(migrate(JSON.parse(old), base));
   } catch {}
   return base;
 }
+
+/* Every way state can arrive — loaded, restored from a backup, pulled from the
+   synced file — goes through here. Each step is a no-op on data that has
+   already been through it, so it is safe to run on every path. */
+function upgrade(s){ return migrateMonths(migrateFloor(s)); }
 
 /* Minimum balance used to live per currency. Give its whole value to whichever
    account of that currency currently holds the most — a one-time guess the
@@ -227,6 +243,45 @@ function migrateFloor(s){
   }
   s.accounts.forEach(a => { if (a.floor == null) a.floor = 0; });
   delete s.floor;
+  return s;
+}
+
+/* Figures used to hang off the record itself: one real number for this month,
+   plus one optional forecast for next. A month is a first-class thing now, so
+   they move into S.months keyed by calendar month — the typed figures land in
+   the month they were actually about, and a forecast lands in the month it was
+   stamped for. The record keeps only what is true of every month. */
+function migrateMonths(s){
+  if (!s.months) s.months = {};
+  const now = thisMonthKey();
+  const put = (kind, key, id, v) => {
+    if (v == null || !key) return;
+    const r = s.months[key] = s.months[key] || {};
+    (r[kind] = r[kind] || {})[id] = v;
+  };
+
+  for (const a of (s.accounts || [])){
+    if ('balance' in a){ put('accounts', now, a.id, +a.balance || 0); delete a.balance; }
+    if (a.fcMonth) put('accounts', a.fcMonth, a.id, +a.fcBalance || 0);
+    delete a.fcMonth; delete a.fcBalance;
+  }
+  for (const c of (s.cards || [])){
+    if ('outstanding' in c){ put('cards', now, c.id, +c.outstanding || 0); delete c.outstanding; }
+    if (c.fcMonth) put('cards', c.fcMonth, c.id, +c.fcOutstanding || 0);
+    delete c.fcMonth; delete c.fcOutstanding;
+  }
+  for (const l of (s.lines || [])){
+    if ('status' in l){
+      if (l.status === 'paid') put('lines', now, l.id, 'paid');
+      delete l.status;
+    }
+    // A one-off carried no month of its own; it was about the month it was entered in.
+    if (!l.repeats && !l.month) l.month = now;
+  }
+  for (const g of (s.goals || [])){
+    if (g.movedOn) put('goals', g.movedOn, g.id, { amount: +g.movedAmount || 0 });
+    delete g.movedOn; delete g.movedAmount;
+  }
   return s;
 }
 
@@ -255,7 +310,7 @@ function save(){
 /* Everything that travels between devices. The sync credentials deliberately
    live outside it, so they reach neither a backup nor the remote file. */
 const payload = () => ({
-  accounts:S.accounts, cards:S.cards, lines:S.lines, goals:S.goals,
+  accounts:S.accounts, cards:S.cards, lines:S.lines, goals:S.goals, months:S.months,
   provision:S.provision, rates:S.rates, haircut:S.haircut,
   cycleDay:S.cycleDay, displayCurrency:S.displayCurrency, updatedAt:S.updatedAt });
 
@@ -264,22 +319,37 @@ const hasData = () => S.accounts.length || S.cards.length || S.lines.length || S
 function adopt(d){
   Object.assign(S, {
     accounts:d.accounts || [], cards:d.cards || [], lines:d.lines || [], goals:d.goals || [],
-    provision:d.provision || S.provision, rates:d.rates || S.rates,
+    months:d.months || {}, provision:d.provision || S.provision, rates:d.rates || S.rates,
     haircut:d.haircut != null ? d.haircut : S.haircut,
     cycleDay:d.cycleDay != null ? d.cycleDay : S.cycleDay,
     displayCurrency:d.displayCurrency || S.displayCurrency, updatedAt:d.updatedAt || null });
-  migrateFloor(S);
+  upgrade(S);
   persist();
 }
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 /* ---------- dates ---------- */
 
-const today = () => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); };
+/* Hoisted, because load() runs before the const helpers below are initialised
+   and the migration inside it needs to know what month it is. */
+function today(){ const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
+function ym(d){ return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2,'0'); }
+function thisMonthKey(){ return ym(today()); }
+
 const daysInMonth = d => new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
 const clampDay = (d, day) => new Date(d.getFullYear(), d.getMonth(), Math.min(day, daysInMonth(d)));
-const monthName = n => new Date(today().getFullYear(), today().getMonth() + n, 1)
-  .toLocaleDateString(undefined, { month:'long' });
+
+/* A month key is 'YYYY-MM', and it is the app's unit of time: every balance,
+   status and transfer is read for exactly one of them. The arithmetic goes
+   through Date so December rolls into January without a special case. */
+const ymParts = k => String(k || '').split('-').map(Number);
+const ymDate = k => { const [y,m] = ymParts(k); return new Date(y, m - 1, 1); };
+const ymAdd = (k, n) => { const [y,m] = ymParts(k); return ym(new Date(y, m - 1 + n, 1)); };
+const ymDiff = (from, to) => { const [ay,am] = ymParts(from), [by,bm] = ymParts(to);
+  return (by - ay) * 12 + (bm - am); };
+const isThisMonth = k => k === thisMonthKey();
+const monthTitle = k => ymParts(k)[0]
+  ? ymDate(k).toLocaleDateString(undefined, { month:'long', year:'numeric' }) : '—';
 
 /* Days until the cycle resets. The spreadsheet measured to this month's cycle
    day only, so the provision fell to zero for the rest of the month once that
@@ -292,37 +362,23 @@ function daysToCycle(){
 }
 
 const ordinal = n => n + (['th','st','nd','rd'][(n % 100 - 20) % 10] || ['th','st','nd','rd'][n % 100] || 'th');
-const targetYm = which => { const t = today();
-  return ym(new Date(t.getFullYear(), t.getMonth() + which, 1)); };
-const ym = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2,'0');
-const monthLabel = by => {
-  const [y,m] = String(by || '').split('-').map(Number);
-  return y ? new Date(y, m - 1, 1).toLocaleDateString(undefined, { month:'short', year:'numeric' }) : '—';
-};
-const monthsUntil = by => {
-  const [y,m] = String(by || '').split('-').map(Number);
-  const t = today();
-  return y ? (y - t.getFullYear()) * 12 + (m - 1 - t.getMonth()) : 0;
-};
-const defaultBy = () => { const t = today(); return ym(new Date(t.getFullYear(), t.getMonth() + 6, 1)); };
-
-const thisMonthKey = () => ym(today());
-const movedThisMonth = g => g.movedOn === thisMonthKey();
+const monthLabel = by => ymParts(by)[0]
+  ? ymDate(by).toLocaleDateString(undefined, { month:'short', year:'numeric' }) : '—';
+// Months from the month you are looking at to the one a goal is needed by.
+const monthsUntil = (by, from) => ymParts(by)[0] ? ymDiff(from || viewYm, by) : 0;
+const defaultBy = () => ymAdd(thisMonthKey(), 6);
 
 /* What a goal still needs moved in a given month: the shortfall spread evenly
-   over the months that have yet to be funded, counting this one. Once this
-   month's transfer is marked moved, the month drops out and the rest re-levels
-   over what remains. A goal whose month has passed and is still short needs the
-   whole remainder now. */
-function goalMonthly(g, which){
+   over the months from that one to the month it is needed by, counting both
+   ends. Ticking a month's transfer as moved drops it to zero there and
+   re-levels every other month, because ticking adds to `saved` and so shrinks
+   the shortfall the rest are sharing. A goal whose month has already gone by
+   needs the whole remainder in whatever month you are looking at. */
+function goalMonthly(g, k){
   const remaining = Math.max(0, (+g.target || 0) - (+g.saved || 0));
-  if (!remaining) return 0;
-  const left = monthsUntil(g.by);
-  const done = movedThisMonth(g);
-  if (left < 0) return (which === 0 && !done) ? remaining : 0;
-  const start = done ? 1 : 0;
-  if (which < start || which > left) return 0;
-  return remaining / (left - start + 1);
+  if (!remaining || goalMoved(g, k)) return 0;
+  const left = monthsUntil(g.by, k);
+  return left < 0 ? remaining : remaining / (left + 1);
 }
 
 /* A goal not yet moved is still sitting in the account, same as the minimum
@@ -348,18 +404,36 @@ const convert = (n, from, to) => fromAED(toAED(n, from), to);
 
 /* ---------- the engine ---------- */
 
-/* This month is always the real, typed figure. Next month defaults to a fixed
-   assumption — the account's own minimum balance, a card paid to zero — and a
-   forecast entered for that specific calendar month overrides it. The stamp
-   means a stale forecast from a month you skipped never leaks into the wrong
-   one; it simply falls back to the default again. */
-const accountValue = (a, which) => which === 0
-  ? (+a.balance || 0)
-  : (a.fcMonth === targetYm(which) ? (+a.fcBalance || 0) : (+a.floor || 0));
-const cardValue = (c, which) => which === 0
-  ? (+c.outstanding || 0)
-  : (c.fcMonth === targetYm(which) ? (+c.fcOutstanding || 0) : 0);
-const hasForecast = (item, which) => which > 0 && item.fcMonth === targetYm(which);
+/* Nothing is stored for a month until you type something into it, and what is
+   absent has a defined answer rather than being blank: an account sits at its
+   own minimum balance, a card is paid off, a line is still outstanding. So any
+   untouched month — past, present or future — reads as the conservative case,
+   and typing one figure stops only that one figure being assumed. Clearing a
+   figure back to its assumption removes the entry, so a month you have emptied
+   is indistinguishable from one you never opened. */
+const held = (kind, k, id) => { const r = S.months[k]; return r && r[kind] ? r[kind][id] : undefined; };
+const isSet = (kind, k, id) => held(kind, k, id) !== undefined;
+const monthTouched = k => !!S.months[k];
+
+function setHeld(kind, k, id, v){
+  if (v === undefined){
+    const r = S.months[k];
+    if (!r || !r[kind]) return;
+    delete r[kind][id];
+    if (!Object.keys(r[kind]).length) delete r[kind];
+    if (!Object.keys(r).length) delete S.months[k];
+    return;
+  }
+  const r = S.months[k] = S.months[k] || {};
+  (r[kind] = r[kind] || {})[id] = v;
+}
+
+const accountValue = (a, k) => { const v = held('accounts', k, a.id);
+  return v === undefined ? (+a.floor || 0) : (+v || 0); };
+const cardValue = (c, k) => { const v = held('cards', k, c.id);
+  return v === undefined ? 0 : (+v || 0); };
+const lineIsPaid = (l, k) => held('lines', k, l.id) === 'paid';
+const goalMoved = (g, k) => held('goals', k, g.id);
 
 const activeCurrencies = () => CURRENCIES.filter(c =>
   S.accounts.some(a => a.currency === c) ||
@@ -369,24 +443,27 @@ const activeCurrencies = () => CURRENCIES.filter(c =>
 
 const sum = (arr, k) => arr.reduce((s, x) => s + (+x[k] || 0), 0);
 
-// A line counts this month only while it is still outstanding; next month every
-// repeating line is pending again.
-function monthFor(ccy, which){
-  const next = which === 1;
-  const mine = S.lines.filter(l => l.currency === ccy && (!next || l.repeats));
-  const live = mine.filter(l => next || l.status !== 'paid');
+/* A line belongs to a month if it repeats, or if it is the one-off entered
+   against that month; it counts there while it is still outstanding there.
+   Only the month actually running is part-spent, so it is the only one whose
+   provision is pro-rated — every other month budgets a full thirty days. */
+const linesIn = k => S.lines.filter(l => l.repeats || l.month === k);
+
+function monthFor(ccy, k){
+  const mine = linesIn(k).filter(l => l.currency === ccy);
+  const live = mine.filter(l => !lineIsPaid(l, k));
 
   const myAccounts = S.accounts.filter(a => a.currency === ccy);
   const myCards    = S.cards.filter(x => x.currency === ccy);
 
-  const opening   = myAccounts.reduce((s,a) => s + accountValue(a, which), 0);
+  const opening   = myAccounts.reduce((s,a) => s + accountValue(a, k), 0);
   const income    = sum(live.filter(l => l.group === 'income'), 'amount');
   const dues      = sum(live.filter(l => l.group === 'due'), 'amount');
-  const cards     = myCards.reduce((s,c) => s + cardValue(c, which), 0);
-  const days      = next ? 30 : daysToCycle();
+  const cards     = myCards.reduce((s,c) => s + cardValue(c, k), 0);
+  const days      = isThisMonth(k) ? daysToCycle() : 30;
   const provision = (+S.provision[ccy] || 0) * days / 30;
   const goals     = S.goals.filter(g => g.currency === ccy)
-                           .reduce((s,g) => s + goalMonthly(g, which), 0);
+                           .reduce((s,g) => s + goalMonthly(g, k), 0);
   const floor     = sum(myAccounts, 'floor');
 
   const net = opening + income - cards - dues - provision;
@@ -419,12 +496,9 @@ function transfersFor(months, act){
 
 function computeAll(){
   const act = activeCurrencies();
-  const m0 = {}, m1 = {};
-  for (const c of act) m0[c] = monthFor(c, 0);
-  const t0 = transfersFor(m0, act);
-  for (const c of act) m1[c] = monthFor(c, 1);
-  const t1 = transfersFor(m1, act);
-  return { act, months: [m0, m1], moves: [t0.moves, t1.moves] };
+  const m = {};
+  for (const c of act) m[c] = monthFor(c, viewYm);
+  return { act, m, moves: transfersFor(m, act).moves };
 }
 
 /* ---------- views ---------- */
@@ -441,17 +515,18 @@ function wf(label, value, ccy, o){
 }
 
 function monthView(){
-  const { act, months, moves } = computeAll();
+  const { act, m, moves: mv } = computeAll();
   if (!act.length){
     return '<div class="card empty">Nothing to work with yet.<br><br>' +
       'Put your bank balances and card outstandings on the <b>Accounts</b> tab, ' +
       'then your salary and dues under <b>Money</b>.</div>';
   }
 
-  const m = months[monthIdx], mv = moves[monthIdx];
-  let html = monthIdx ? '<div class="hint" style="margin:-4px 0 12px">Assumes every account ' +
-    'sits at its minimum balance and every card is paid off, unless you\'ve set a forecast for ' +
-    'a specific account on the <b>Accounts</b> tab.</div>' : '';
+  let html = monthTouched(viewYm) ? '' :
+    '<div class="hint" style="margin:-4px 0 12px">Nothing typed against ' + monthTitle(viewYm) +
+    ' yet, so every account sits at its minimum balance, every card is paid off and every line ' +
+    'is still outstanding. Type a figure on <b>Accounts</b>, or tick a line on <b>Money</b>, and ' +
+    'only what you touch stops being assumed.</div>';
 
   if (act.length > 1){
     const dc = S.displayCurrency;
@@ -472,23 +547,23 @@ function monthView(){
     const goalRows = myGoals.map(g => {
       const target = +g.target || 0, saved = Math.min(+g.saved || 0, target);
       const full = target > 0 && saved >= target;
-      const amt = goalMonthly(g, monthIdx);
-      const label = full ? 'funded' : (!monthIdx && movedThisMonth(g)) ? 'moved' : money(amt, c);
+      const amt = goalMonthly(g, viewYm);
+      const label = full ? 'funded' : goalMoved(g, viewYm) ? 'moved' : money(amt, c);
       return wf(esc(g.name), 0, c, { sub:true, text: label });
     }).join('');
 
     html += '<div class="card pool' + (short ? ' alert' : '') + '">' +
       '<div class="pool-head"><span class="ccy">' + c + '</span>' +
-        '<span class="label">' + (short ? 'short this month' : '') + '</span></div>' +
+        '<span class="label">' + (short ? 'short' : '') + '</span></div>' +
       '<div class="now num' + (short ? ' neg' : '') + '">' + money(p.investable, c) + '</div>' +
       '<div class="caption">' + (short
         ? 'nothing free until this is covered'
         : money(p.net, c) + ' available, holding ' + money(p.floor, c) + ' back') + '</div>' +
       '<div class="wfblock">' +
-        wf(monthIdx ? 'Opening balance' : 'Bank balances', p.opening, c) +
-        wf(monthIdx ? 'Income' : 'Income outstanding', p.income, c, { sign:true, cls: p.income >= 0 ? 'pos' : 'neg' }) +
+        wf(isThisMonth(viewYm) ? 'Bank balances' : 'Opening balance', p.opening, c) +
+        wf('Income outstanding', p.income, c, { sign:true, cls: p.income >= 0 ? 'pos' : 'neg' }) +
         (p.cards ? wf('Card outstanding', -p.cards, c, { sign:true, cls:'neg' }) : '') +
-        wf(monthIdx ? 'Dues' : 'Dues outstanding', -p.dues, c, { sign:true, cls:'neg' }) +
+        wf('Dues outstanding', -p.dues, c, { sign:true, cls:'neg' }) +
         (p.provision ? wf('Spending provision · ' + p.days + '/30 days', -p.provision, c, { sign:true, cls:'neg' }) : '') +
 
         wf('Net available', p.net, c, { rule:true, strong:true, cls: p.net < 0 ? 'neg' : '' }) +
@@ -511,31 +586,26 @@ function monthView(){
 }
 
 function moneyView(){
-  const dc = S.displayCurrency, next = !!monthIdx;
+  const dc = S.displayCurrency;
+  const days = isThisMonth(viewYm) ? daysToCycle() : 30;
 
-  // Next month only counts repeating lines, all pending — the same filter the
-  // waterfall applies — and there is nothing to tick yet for a month that
-  // has not started.
+  // Every month is tickable, and each keeps its own statuses — a line ticked
+  // paid in August is still outstanding in September.
   const block = (group, title) => {
-    const all = S.lines.filter(l => l.group === group);
-    const list = next ? all.filter(l => l.repeats) : all;
-    const open = next ? list : list.filter(l => l.status !== 'paid');
+    const list = linesIn(viewYm).filter(l => l.group === group);
+    const open = list.filter(l => !lineIsPaid(l, viewYm));
     let owed = open.reduce((s,l) => s + convert(+l.amount || 0, l.currency, dc), 0);
     const extra = group === 'due' ? provisionRows() : '';
     if (group === 'due') owed += activeCurrencies()
-      .reduce((s,c) => s + convert((+S.provision[c] || 0) * (next ? 30 : daysToCycle()) / 30, c, dc), 0);
+      .reduce((s,c) => s + convert((+S.provision[c] || 0) * days / 30, c, dc), 0);
     if (!list.length && !extra) return '';
-    const header = next
-      ? list.length + (list.length === 1 ? ' item' : ' items') + ' · ≈ ' + money(owed, dc) + ' next month'
-      : open.length + ' of ' + list.length + ' left · ≈ ' + money(owed, dc);
+    const header = open.length + ' of ' + list.length + ' left · ≈ ' + money(owed, dc);
     return '<h2>' + title + '<span class="r">' + header + '</span></h2><div class="card">' +
       list.map(l => {
-        const paid = !next && l.status === 'paid';
-        const pill = next
-          ? '<span class="pill" aria-hidden="true" style="opacity:.35"></span>'
-          : '<button class="pill' + (paid ? ' paid' : '') + '" data-toggle="' + l.id + '" ' +
+        const paid = lineIsPaid(l, viewYm);
+        const pill = '<button class="pill' + (paid ? ' paid' : '') + '" data-toggle="' + l.id + '" ' +
               'aria-label="Mark ' + (paid ? 'unpaid' : 'paid') + '">✓</button>';
-        const sub = next ? 'due next month' : (paid ? 'paid' : 'outstanding') +
+        const sub = (paid ? 'paid' : 'outstanding') +
               (l.repeats ? ' · every month' : ' · one time');
         return '<div class="item' + (paid ? ' done' : '') + '" data-edit-line="' + l.id + '">' +
           pill +
@@ -549,8 +619,9 @@ function moneyView(){
 
   // The provision is computed, not entered — show it where the sheet kept it.
   function provisionRows(){
-    const d = next ? 30 : daysToCycle();
-    const label = next ? 'a full month' : d + ' of 30 days to the ' + ordinal(S.cycleDay);
+    const d = days;
+    const label = isThisMonth(viewYm)
+      ? d + ' of 30 days to the ' + ordinal(S.cycleDay) : 'a full month';
     return activeCurrencies().filter(c => +S.provision[c]).map(c =>
       '<div class="item" data-settings><div class="grow">' +
         '<div class="name">Spending provision</div>' +
@@ -561,17 +632,17 @@ function moneyView(){
 
   const goals = () => {
     if (!S.goals.length) return '';
-    const toMove = S.goals.reduce((s,g) => s + convert(goalMonthly(g, 0), g.currency, dc), 0);
+    const toMove = S.goals.reduce((s,g) => s + convert(goalMonthly(g, viewYm), g.currency, dc), 0);
     return '<h2>Goals<span class="r">' + (toMove > 0.5 ? '≈ ' + money(toMove, dc) + ' still to move'
-                                                       : 'all moved this month') + '</span></h2><div class="card">' +
+                                                       : 'nothing left to move') + '</span></h2><div class="card">' +
       S.goals.map(g => {
         const target = +g.target || 0, saved = Math.min(+g.saved || 0, target);
         const full = target > 0 && saved >= target;
-        const moved = movedThisMonth(g);
-        const left = monthsUntil(g.by), per = goalMonthly(g, 0);
+        const moved = goalMoved(g, viewYm);
+        const left = monthsUntil(g.by, viewYm), per = goalMonthly(g, viewYm);
         const pct = target > 0 ? Math.max(0, Math.min(100, saved / target * 100)) : 0;
         const status = full ? 'fully funded'
-          : moved ? money(+g.movedAmount || 0, g.currency) + ' moved this month'
+          : moved ? money(+moved.amount || 0, g.currency) + ' moved in ' + monthLabel(viewYm)
           : left < 0 ? 'was due ' + monthLabel(g.by) + ' · ' + money(target - saved, g.currency) + ' short'
           : 'by ' + monthLabel(g.by) + ' · ' + (left === 0 ? 'needed this month' : left + ' months to go');
         return '<div class="goal" data-edit-goal="' + g.id + '">' +
@@ -579,7 +650,7 @@ function moneyView(){
             (full
               ? '<span class="pill paid" aria-hidden="true">✓</span>'
               : '<button class="pill' + (moved ? ' paid' : '') + '" data-goal-toggle="' + g.id +
-                '" aria-label="' + (moved ? 'Undo this month\'s transfer' : 'Mark this month\'s transfer moved') +
+                '" aria-label="' + (moved ? 'Undo the transfer for this month' : 'Mark this month\'s transfer moved') +
                 '">✓</button>') +
             '<span class="name">' + esc(g.name) + '</span>' +
             '<span class="chip">' + g.currency + '</span>' +
@@ -599,7 +670,6 @@ function moneyView(){
 }
 
 function accountsView(){
-  const next = !!monthIdx;
   const section = (list, kind, title) => {
     if (!list.length) return '';
     let out = '<h2>' + title + '</h2><div class="card">';
@@ -607,15 +677,14 @@ function accountsView(){
       const mine = list.filter(x => x.currency === c);
       if (!mine.length) continue;
       out += mine.map(x => {
-        const val = kind === 'card' ? cardValue(x, monthIdx) : accountValue(x, monthIdx);
-        const forecast = hasForecast(x, monthIdx);
-        const assumed = next && !forecast
-          ? '<div class="sub">' + (kind === 'card' ? 'assumed paid off' : 'assumed at minimum') + '</div>'
-          : '';
+        const val = kind === 'card' ? cardValue(x, viewYm) : accountValue(x, viewYm);
+        const set = isSet(kind === 'card' ? 'cards' : 'accounts', viewYm, x.id);
+        const assumed = set ? ''
+          : '<div class="sub">' + (kind === 'card' ? 'assumed paid off' : 'assumed at minimum') + '</div>';
         return '<div class="item" data-edit-' + kind + '="' + x.id + '"><div class="grow">' +
             '<div class="name">' + esc(x.name) + '</div>' + assumed + '</div>' +
           '<span class="chip">' + c + '</span>' +
-          (next ? '<span class="chip' + (forecast ? '' : ' auto') + '">' + (forecast ? 'SET' : 'AUTO') + '</span>' : '') +
+          (set ? '' : '<span class="chip auto">AUTO</span>') +
           '<div class="amt num' + (kind === 'card' ? ' neg' : '') + '">' + money(val, c) + '</div></div>';
       }).join('');
     }
@@ -652,29 +721,28 @@ function sheetHTML(){
 
   if (sheetState.type === 'account' || sheetState.type === 'card'){
     const card = sheetState.type === 'card';
-    const fcLabel = 'Next month · ' + monthName(1);
-    const fcDefault = card ? 'paid off' : 'your minimum balance';
-    const fcField = card ? 'fcOutstanding' : 'fcBalance';
+    const fld = card ? 'outstanding' : 'balance';
+    const when = isThisMonth(viewYm) ? 'right now' : 'in ' + monthTitle(viewYm);
     return '<h3>' + (isNew ? 'Add ' : 'Edit ') + (card ? 'credit card' : 'bank account') + '</h3>' +
       '<label>Name</label>' + field('name', d.name, 'text') +
       '<label>Currency</label>' + ccySeg(d.currency) +
-      '<label>' + (card ? 'Outstanding right now' : 'Balance right now') + '</label>' +
-      field(card ? 'outstanding' : 'balance', card ? d.outstanding : d.balance) +
       (card ? '' :
         '<label>Minimum balance</label>' + field('floor', d.floor) +
-        '<div class="hint">What this account should never dip below. Counted toward the ' +
-          'minimum balance the month view holds back, and stands in as ' + fcDefault + ' for ' +
-          'a month you have not forecast.</div>') +
-      '<label style="margin-top:20px">' + fcLabel + '</label>' +
-      seg('fcMode', [{v:'auto', t:card ? 'Paid off' : 'Minimum balance'}, {v:'manual', t:'Set manually'}], d.fcMode) +
-      (d.fcMode === 'manual'
-        ? '<label>' + (card ? 'Expected outstanding' : 'Expected balance') + '</label>' + field(fcField, d[fcField])
+        '<div class="hint">What this account should never dip below. It is counted toward the ' +
+          'minimum balance the month view holds back, and it is what every month you have not ' +
+          'typed a figure into assumes you are sitting on.</div>') +
+      '<label style="margin-top:20px">' + monthTitle(viewYm) + '</label>' +
+      seg('mode', [{v:'auto', t:card ? 'Paid off' : 'Minimum balance'}, {v:'manual', t:'Set manually'}], d.mode) +
+      (d.mode === 'manual'
+        ? '<label>' + (card ? 'Outstanding ' : 'Balance ') + when + '</label>' + field(fld, d[fld])
         : '') +
+      '<div class="hint">This figure belongs to ' + monthTitle(viewYm) + ' alone. Every other ' +
+        'month keeps whatever you set for it, or its own assumption.</div>' +
       acts;
   }
 
   if (sheetState.type === 'goal'){
-    const per = goalMonthly({ ...d, target:+d.target || 0, saved:+d.saved || 0 }, 0);
+    const per = goalMonthly({ ...d, target:+d.target || 0, saved:+d.saved || 0 }, viewYm);
     return '<h3>' + (isNew ? 'Add a goal' : 'Edit goal') + '</h3>' +
       '<label>What for</label>' + field('name', d.name, 'text') +
       '<label>Currency</label>' + ccySeg(d.currency) +
@@ -691,6 +759,7 @@ function sheetHTML(){
   }
 
   if (sheetState.type === 'line'){
+    const stamp = d.repeats === 'no' ? (d.month || viewYm) : viewYm;
     return '<h3>' + (isNew ? 'Add money in / due' : 'Edit') + '</h3>' +
       '<label>Name</label>' + field('name', d.name, 'text') +
       '<label>Which side</label>' + seg('group', [{v:'income',t:'Money in'},{v:'due',t:'Due / expense'}], d.group) +
@@ -699,7 +768,13 @@ function sheetHTML(){
       '<div class="hint">A negative amount on a money-in line works, for deductions taken ' +
         'straight off your salary.</div>' +
       '<label>Repeats</label>' + seg('repeats', [{v:'yes',t:'Every month'},{v:'no',t:'One time'}], d.repeats) +
-      '<label>Status</label>' + seg('status', [{v:'pending',t:'Outstanding'},{v:'paid',t:'Paid'}], d.status) +
+      (d.repeats === 'no'
+        ? '<label>Which month</label>' + field('month', d.month, 'month') +
+          '<div class="hint">A one-off belongs to a single month and shows up in that one only. ' +
+            'A repeating line shows up in every month.</div>'
+        : '') +
+      '<label>Status in ' + monthTitle(stamp) + '</label>' +
+      seg('status', [{v:'pending',t:'Outstanding'},{v:'paid',t:'Paid'}], d.status) +
       acts;
   }
 
@@ -764,23 +839,27 @@ function commit(){
   const named = (fallback) => (d.name || '').trim() || fallback;
 
   if (t === 'account'){
-    const manual = d.fcMode === 'manual';
-    upsert(S.accounts, { id: sheetState.id || uid(), name: named('Account'),
-                         currency: d.currency, balance: +d.balance || 0, floor: +d.floor || 0,
-                         fcMonth: manual ? targetYm(1) : null, fcBalance: manual ? (+d.fcBalance || 0) : 0 });
+    const id = sheetState.id || uid();
+    upsert(S.accounts, { id, name: named('Account'), currency: d.currency, floor: +d.floor || 0 });
+    setHeld('accounts', viewYm, id, d.mode === 'manual' ? (+d.balance || 0) : undefined);
   } else if (t === 'card'){
-    const manual = d.fcMode === 'manual';
-    upsert(S.cards, { id: sheetState.id || uid(), name: named('Card'),
-                      currency: d.currency, outstanding: +d.outstanding || 0,
-                      fcMonth: manual ? targetYm(1) : null, fcOutstanding: manual ? (+d.fcOutstanding || 0) : 0 });
+    const id = sheetState.id || uid();
+    upsert(S.cards, { id, name: named('Card'), currency: d.currency });
+    setHeld('cards', viewYm, id, d.mode === 'manual' ? (+d.outstanding || 0) : undefined);
   } else if (t === 'goal'){
     upsert(S.goals, { id: sheetState.id || uid(), name: named('Goal'), currency: d.currency,
-                      target: +d.target || 0, saved: +d.saved || 0, by: d.by || defaultBy(),
-                      movedOn: d.movedOn || null, movedAmount: +d.movedAmount || 0 });
+                      target: +d.target || 0, saved: +d.saved || 0, by: d.by || defaultBy() });
   } else if (t === 'line'){
-    upsert(S.lines, { id: sheetState.id || uid(), name: named('Line'), group: d.group,
-                      currency: d.currency, amount: +d.amount || 0,
-                      status: d.status, repeats: d.repeats === 'yes' });
+    const id = sheetState.id || uid();
+    const repeats = d.repeats === 'yes';
+    const was = S.lines.find(x => x.id === id);
+    const month = repeats ? null : (d.month || viewYm);
+    // A one-off dragged to another month takes its status with it, rather than
+    // leaving one stranded in a month it no longer appears in.
+    if (was && !was.repeats && was.month !== month) setHeld('lines', was.month, id, undefined);
+    upsert(S.lines, { id, name: named('Line'), group: d.group, currency: d.currency,
+                      amount: +d.amount || 0, repeats, month });
+    setHeld('lines', repeats ? viewYm : month, id, d.status === 'paid' ? 'paid' : undefined);
   } else {
     S.displayCurrency = d.displayCurrency;
     S.rates.INRperAED = +d.rates.INRperAED || S.rates.INRperAED;
@@ -800,9 +879,10 @@ function commit(){
       try {
         const b = JSON.parse(d.backup);
         if (Array.isArray(b.accounts) && Array.isArray(b.lines)){
-          migrateFloor(b);   // an old-shaped backup still carries a currency-level floor
           Object.assign(S, { accounts:b.accounts, cards:b.cards || [], lines:b.lines,
-            goals:b.goals || [], provision:b.provision || S.provision, rates:b.rates || S.rates });
+            goals:b.goals || [], months:b.months || {},
+            provision:b.provision || S.provision, rates:b.rates || S.rates });
+          upgrade(S);   // an old-shaped backup carries a currency floor and per-record figures
         } else alert('That backup is missing its accounts or lines — nothing was restored.');
       } catch { alert('That backup text is not valid JSON — your other settings were still saved.'); }
     }
@@ -988,18 +1068,24 @@ const TABS = [
   { id:'accounts', g:'▤', t:'Accounts' }
 ];
 
-function monthSwitch(){
+/* Any month, in either direction. The middle button names the one on screen
+   and jumps back to the current one, so however far you have wandered getting
+   home is a single tap. */
+function monthPicker(){
   if (!hasData()) return '';
-  return '<div class="switch">' + [0,1].map(i =>
-    '<button data-month="' + i + '" aria-pressed="' + (i === monthIdx) + '">' +
-    (i === 0 ? 'This month' : 'Next month') + ' · ' + monthName(i) + '</button>').join('') + '</div>';
+  const now = isThisMonth(viewYm);
+  return '<div class="switch mp">' +
+    '<button data-mstep="-1" aria-label="Previous month">‹</button>' +
+    '<button class="mp-now" data-mjump aria-label="Go to this month">' + monthTitle(viewYm) +
+      (now ? '' : '<span class="mp-back">tap for this month</span>') + '</button>' +
+    '<button data-mstep="1" aria-label="Next month">›</button></div>';
 }
 
 function render(){
   const body = view === 'month' ? monthView() : view === 'money' ? moneyView() : accountsView();
   document.getElementById('app').innerHTML =
     '<header><h1>Cash Runway</h1><button class="icon" data-settings aria-label="Settings">⚙</button></header>' +
-    syncLine() + monthSwitch() + body;
+    syncLine() + monthPicker() + body;
   document.getElementById('tabs').innerHTML = TABS.map(t =>
     '<button data-tab="' + t.id + '" aria-current="' + (view === t.id) + '">' +
     '<span class="g">' + t.g + '</span>' + t.t + '</button>').join('');
@@ -1023,20 +1109,21 @@ document.addEventListener('click', e => {
   const tog = hit('[data-toggle]');
   if (tog){
     const l = S.lines.find(x => x.id === tog.dataset.toggle);
-    if (l) l.status = l.status === 'paid' ? 'pending' : 'paid';
+    if (l) setHeld('lines', viewYm, l.id, lineIsPaid(l, viewYm) ? undefined : 'paid');
     return save();
   }
 
   const gt = hit('[data-goal-toggle]');
   if (gt){
     const g = S.goals.find(x => x.id === gt.dataset.goalToggle);
-    if (g && movedThisMonth(g)){
-      g.saved = Math.max(0, (+g.saved || 0) - (+g.movedAmount || 0));
-      g.movedOn = null; g.movedAmount = 0;
+    const moved = g && goalMoved(g, viewYm);
+    if (moved){
+      g.saved = Math.max(0, (+g.saved || 0) - (+moved.amount || 0));
+      setHeld('goals', viewYm, g.id, undefined);
     } else if (g){
-      const amount = goalMonthly(g, 0);      // read before it shifts
+      const amount = goalMonthly(g, viewYm);   // read before it shifts
       g.saved = (+g.saved || 0) + amount;
-      g.movedOn = thisMonthKey(); g.movedAmount = amount;
+      setHeld('goals', viewYm, g.id, { amount });
     }
     return save();
   }
@@ -1047,30 +1134,45 @@ document.addEventListener('click', e => {
   const tab = hit('[data-tab]');
   if (tab){ view = tab.dataset.tab; return render(); }
 
-  const mon = hit('[data-month]');
-  if (mon){ monthIdx = +mon.dataset.month; return render(); }
+  const step = hit('[data-mstep]');
+  if (step){ viewYm = ymAdd(viewYm, +step.dataset.mstep); return render(); }
+  if (hit('[data-mjump]')){ viewYm = thisMonthKey(); return render(); }
 
   if (hit('[data-settings]')) return openSheet({ type:'settings', draft: {
     displayCurrency: S.displayCurrency, rates: { ...S.rates }, haircut: S.haircut,
-    cycleDay: S.cycleDay, floor: { ...S.floor }, provision: { ...S.provision },
+    cycleDay: S.cycleDay, provision: { ...S.provision },
     sync: { ...sync }, backup: backupJSON(), backupWas: backupJSON() } });
 
   for (const [attr, type, list, blank] of [
+    // Something newly added opens ready to be typed into, rather than starting
+    // out assumed — you are adding it because you know the figure.
     ['data-edit-account', 'account', S.accounts,
-      { name:'', currency:S.displayCurrency, balance:'', floor:'', fcMode:'auto', fcBalance:'' }],
+      { name:'', currency:S.displayCurrency, balance:'', floor:'', mode:'manual' }],
     ['data-edit-card',    'card',    S.cards,
-      { name:'', currency:S.displayCurrency, outstanding:'', fcMode:'auto', fcOutstanding:'' }],
+      { name:'', currency:S.displayCurrency, outstanding:'', mode:'manual' }],
     ['data-edit-line',    'line',    S.lines,    { name:'', currency:S.displayCurrency, amount:'',
-                                                   group:'due', status:'pending', repeats:'yes' }],
+                                                   group:'due', status:'pending', repeats:'yes',
+                                                   month: viewYm }],
     ['data-edit-goal',    'goal',    S.goals,    { name:'', currency:S.displayCurrency, target:'',
-                                                   saved:'', by: defaultBy(), movedOn:null, movedAmount:0 }]
+                                                   saved:'', by: defaultBy() }]
   ]){
     const el = hit('[' + attr + ']');
     if (!el) continue;
     const rec = list.find(x => x.id === el.getAttribute(attr));
     const draft = rec ? { ...rec } : { ...blank };
-    if (rec && type === 'line') draft.repeats = rec.repeats ? 'yes' : 'no';
-    if (rec && (type === 'account' || type === 'card')) draft.fcMode = hasForecast(rec, 1) ? 'manual' : 'auto';
+    if (rec && type === 'line'){
+      const stamp = rec.repeats ? viewYm : (rec.month || viewYm);
+      draft.repeats = rec.repeats ? 'yes' : 'no';
+      draft.month = rec.month || viewYm;
+      draft.status = lineIsPaid(rec, stamp) ? 'paid' : 'pending';
+    }
+    if (rec && (type === 'account' || type === 'card')){
+      const kind = type === 'card' ? 'cards' : 'accounts';
+      const set = isSet(kind, viewYm, rec.id);
+      draft.mode = set ? 'manual' : 'auto';
+      if (type === 'card') draft.outstanding = set ? cardValue(rec, viewYm) : '';
+      else draft.balance = set ? accountValue(rec, viewYm) : '';
+    }
     return openSheet({ type, id: rec && rec.id, isNew: !rec, draft });
   }
 
@@ -1086,11 +1188,14 @@ document.addEventListener('click', e => {
     sheetState = null; return render();
   }
   if (hit('[data-delete]')){
-    const list = sheetState.type === 'account' ? S.accounts
-               : sheetState.type === 'card'    ? S.cards
-               : sheetState.type === 'goal'    ? S.goals : S.lines;
+    const kind = sheetState.type === 'account' ? 'accounts'
+               : sheetState.type === 'card'    ? 'cards'
+               : sheetState.type === 'goal'    ? 'goals' : 'lines';
+    const list = S[kind];
     const i = list.findIndex(x => x.id === sheetState.id);
     if (i >= 0) list.splice(i, 1);
+    // Otherwise its figures would sit in every month it was ever typed into.
+    for (const k of Object.keys(S.months)) setHeld(kind, k, sheetState.id, undefined);
     sheetState = null;
     return save();
   }
