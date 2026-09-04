@@ -83,6 +83,18 @@ One file, no build step, no dependencies, no server, no account. Open
 `index.html` locally or from GitHub Pages. Fonts are inlined, so it makes zero
 network requests and works offline.
 
+There are tests, and they need nothing installed either:
+
+```
+node test/run.js
+```
+
+They lift the `<script>` straight out of `index.html` and run it against a
+stubbed DOM and `localStorage`, so what's under test is the shipped file rather
+than a copy of it — including the click handler, which the tests fire through
+the app's own event delegation. Three suites: upgrading a v2 device, month
+arithmetic and the defaulting rule, and the editing interactions.
+
 Data lives in `localStorage` on the device you use it on and never leaves the
 phone — which also means it dies if you clear browser data. Settings has a
 **Backup** box: copy that text somewhere safe, paste it back to restore.
